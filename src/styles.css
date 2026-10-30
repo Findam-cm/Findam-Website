@@ -43,7 +43,35 @@
 .contact-pill.wa{background:linear-gradient(180deg,var(--brand-green),var(--brand-green-dark))}
 .contact-pill:hover{transform:translateY(-3px)}
 
-@media(max-width:580px){.filters{grid-template-columns:1fr}.property-form .photo-upload,.photo-previews{grid-column:auto}.photo-previews{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:580px){.filters{grid-template-columns:1fr}.property-form .photo-upload,.photo-previews,.photo-note{grid-column:auto}.photo-previews{grid-template-columns:repeat(2,1fr)}.search-map-canvas{height:280px}}
+
+.hero-photo{display:grid;place-items:center;background:#ff7119;background-image:linear-gradient(160deg,#ff9a4d 0%,#ff7119 55%,#e85f0a 100%)}
+.hero-photo:after{content:'⌂';color:#fff;font-size:92px;line-height:1}
+.copyright{width:min(1200px,calc(100% - 48px));margin:18px auto 0;color:#bbb;font-size:12px;line-height:1.5}
+.search-map{margin:8px 0 22px}
+.search-map-head{display:flex;justify-content:space-between;gap:12px;align-items:baseline;margin-bottom:8px}
+.search-map-head h2{margin:0;font-size:18px}
+.search-map-head p,.search-map-note,.photo-note{margin:8px 0 0;color:#666;font-size:12px;line-height:1.45}
+.search-map-canvas{width:100%;height:420px;border:1px solid var(--line);background:var(--cream)}
+iframe.search-map-canvas{display:block;border:0}
+.listing-photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.search-map.compact .search-map-canvas{height:360px}
+.search-map.routing .search-map-canvas{height:460px}
+.route-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:0 0 10px}
+.route-bar label{display:flex;flex:1;flex-direction:column;gap:4px;min-width:180px;color:#555;font-size:12px;font-weight:700}
+.route-bar input{padding:10px;border:1px solid var(--line);border-radius:6px;font-weight:400}
+.route-modes{display:flex;gap:6px}
+.route-modes button{padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:#fff;color:#444;font-size:12px;font-weight:700}
+.route-modes button.selected{border-color:var(--orange);background:var(--orange);color:#fff}
+.route-open{display:inline-flex;align-items:center;text-decoration:none;font-size:12px}
+.search-map-fallback{padding:16px 18px;border:1px solid var(--line);border-radius:8px;background:var(--cream)}
+.search-map-fallback p{margin:0 0 8px;color:#444;font-size:14px;line-height:1.5}
+.search-map-fallback ol{margin:0;padding-left:18px;color:#444;font-size:13px;line-height:1.5}
+.search-map-fallback code{font-size:12px}
+.photo-note{grid-column:span 2;color:#8a4b12}
+.account-form{max-width:520px}.account-greeting{margin:0 0 16px;color:#397050;font-weight:700}.account-live{max-width:520px;margin-top:28px}.account-live h2{margin:0 0 6px;font-size:20px}.account-live ul{margin:12px 0 0;padding-left:18px}.account-live li{margin:6px 0}
+button:focus-visible,a:focus-visible,.listing-card:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+.search-bar label:focus-within,.filters label:focus-within{box-shadow:inset 0 -2px 0 var(--orange)}
 
 /* Conversational bot and direct contact details */
 .bot-logo,.floating-bot{display:grid;place-items:center;border-radius:50%;background:#fff;color:#25d366}.bot-logo{width:31px;height:31px;font-size:17px}.floating-bot{width:31px;height:31px;font-size:18px}.bot-chat{display:flex;flex-direction:column;gap:8px;max-height:240px;min-height:128px;overflow:auto}.bot-chat p{margin:0}.bot-chat .user{align-self:flex-end;border-radius:8px 8px 0 8px;background:#dcf8e5;color:#284336}.bot-input{display:flex;gap:8px;padding:10px;border-top:1px solid #eee}.bot-input input{flex:1;min-width:0;padding:9px 11px;border:1px solid #ddd;border-radius:18px;outline:none;font-size:12px}.bot-input input:focus{border-color:#25d366}.bot-input button{width:34px;height:34px;border:0;border-radius:50%;background:#25d366;color:#fff}.bot-contact{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:12px;border-top:1px solid #eee;background:#fafafa}.bot-contact b{grid-column:span 2;color:#444;font-size:11px}.bot-contact a{color:#267c48;font-size:11px;text-decoration:none}.whatsapp{min-width:51px}.whatsapp>span:last-child{font-size:12px;font-weight:700}

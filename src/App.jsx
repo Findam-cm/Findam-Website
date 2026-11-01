@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { agents, cities, listings } from './data.js'
 import SearchMap from './SearchMap.jsx'
 import Account from './Account.jsx'
+import Refer, { authHeadersFor } from './Refer.jsx'
+import { authClient } from './auth.js'
 
 const money = (value) => `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value / 1000)}k FCFA`
 
@@ -41,6 +43,8 @@ function App() {
   const [liveListings, setLiveListings] = useState(listings)
   const [liveAgents, setLiveAgents] = useState(agents)
   const [storage, setStorage] = useState('')
+  const [member, setMember] = useState(null)
+  const [creditScore, setCreditScore] = useState(null)
   useEffect(() => {
     let ignore = false
     fetch('/api/listings')
@@ -54,6 +58,25 @@ function App() {
       .catch(() => {})
     return () => { ignore = true }
   }, [])
+  useEffect(() => {
+    let ignore = false
+    authClient.getSession().then((result) => {
+      if (ignore) return
+      const session = result.data?.session
+      const user = result.data?.user
+      setMember(session?.token && user ? { token: session.token, email: user.email, name: user.name } : null)
+    }).catch(() => {})
+    return () => { ignore = true }
+  }, [])
+  useEffect(() => {
+    if (!member?.token) { setCreditScore(null); return undefined }
+    let ignore = false
+    fetch('/api/credits', { headers: authHeadersFor(member) })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => { if (!ignore && payload) setCreditScore(payload) })
+      .catch(() => {})
+    return () => { ignore = true }
+  }, [member])
   const results = useMemo(() => liveListings.filter((listing) => (!city || listing.city === city) && (!type || listing.type === type) && (!maxPrice || listing.price <= Number(maxPrice) * 1000) && `${listing.title} ${listing.city} ${listing.neighbourhood}`.toLowerCase().includes(query.toLowerCase())), [liveListings, city, type, query, maxPrice])
   const go = (next) => { setPage(next); setSelected(null); setMenuOpen(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }
   const showListing = (listing) => { setSelected(listing); setPage('detail'); setMenuOpen(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }
@@ -65,19 +88,20 @@ function App() {
       <button className="brand" onClick={() => go('home')}><Logo /></button>
       <button className="menu" onClick={() => setMenuOpen(!menuOpen)} aria-expanded={menuOpen} aria-controls="site-nav" aria-label="Toggle navigation">☰</button>
       <nav id="site-nav" className={menuOpen ? 'open' : ''}>
-        <button className={page === 'home' ? 'active' : ''} onClick={() => go('home')}>Home</button><button onClick={() => chooseType('Rent')}>Rent</button><button onClick={() => chooseType('Sale')}>Sell</button><button onClick={() => chooseType('Guest house')}>Guest house</button><button onClick={() => go('agents')}>Find Agents</button><button onClick={() => go('workflow')}>How it works</button><button className={page === 'saved' ? 'active' : ''} onClick={() => go('saved')}>Saved</button><button className={page === 'account' ? 'active' : ''} onClick={() => go('account')}>Account</button>
+        <button className={page === 'home' ? 'active' : ''} onClick={() => go('home')}>Home</button><button onClick={() => chooseType('Rent')}>Rent</button><button onClick={() => chooseType('Sale')}>Sell</button><button onClick={() => chooseType('Guest house')}>Guest house</button><button onClick={() => go('agents')}>Find Agents</button><button onClick={() => go('workflow')}>How it works</button><button className={page === 'saved' ? 'active' : ''} onClick={() => go('saved')}>Saved</button><button className={page === 'refer' ? 'active' : ''} onClick={() => go('refer')}>Refer</button><button className={page === 'account' ? 'active' : ''} onClick={() => go('account')}>Account</button>
       </nav>
       <button className="primary compact" onClick={() => go('list')}>List Your Property</button><button className="account" onClick={() => go('saved')} aria-label="Saved properties">♥</button>
     </div></header>
     <main>
       {page === 'home' && <Home listings={liveListings} city={city} setCity={setCity} type={type} setType={setType} maxPrice={maxPrice} setMaxPrice={setMaxPrice} search={() => go('listings')} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} />}
       {page === 'listings' && <Listings results={results} storage={storage} city={city} setCity={setCity} type={type} setType={setType} maxPrice={maxPrice} setMaxPrice={setMaxPrice} query={query} setQuery={setQuery} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} />}
-      {page === 'detail' && <Detail listing={selected} back={() => go('listings')} />}
+      {page === 'detail' && <Detail listing={selected} back={() => go('listings')} member={member} score={creditScore} onScore={setCreditScore} go={go} />}
       {page === 'agents' && <Agents agents={liveAgents} />}
       {page === 'list' && <ListProperty onSaved={(listing) => setLiveListings((current) => [listing, ...current.filter((item) => item.id !== listing.id)])} />}
       {page === 'workflow' && <Workflow go={go} />}
       {page === 'saved' && <Saved listings={liveListings.filter((listing) => savedIds.includes(listing.id))} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} />}
-      {page === 'account' && <Account />}
+      {page === 'account' && <Account onMember={setMember} />}
+      {page === 'refer' && <Refer member={member} onScore={setCreditScore} />}
     </main>
     <HelpBot go={go} chooseType={chooseType} />
     <footer><div className="shell footer"><div><Logo /><p>Find verified properties. Move in with confidence.</p></div><div><b>Explore</b><button onClick={() => chooseType('Rent')}>Rent a home</button><button onClick={() => go('agents')}>Find an agent</button></div><div><b>Available cities</b>{cities.map((item) => <span key={item}>{item}</span>)}</div></div><p className="copyright">© {new Date().getFullYear()} FindamCameroon. All rights reserved. Original listing text, the Findam name, and this site layout belong to FindamCameroon. Map imagery is supplied by Google under the Google Maps Platform terms and remains Google’s property.</p></footer>
@@ -101,7 +125,30 @@ function Role({ icon, title, text, action, onClick }) { return <article classNam
 function Step({ number, title, text }) { return <article><b>{number}</b><h3>{title}</h3><p>{text}</p></article> }
 
 function Listings({ results, storage, city, setCity, type, setType, maxPrice, setMaxPrice, query, setQuery, onOpen, savedIds, onSave }) { return <section className="shell section"><p className="kicker">VERIFIED LISTINGS</p><h1 className="page-title">Find your next home</h1><div className="filters"><SearchFields {...{ city, setCity, type, setType }} /><label><span>Max price (thousand FCFA)</span><input type="number" min="0" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} placeholder="e.g. 150" /></label><label><span>Search location or property</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="e.g. Molyko" /></label></div><p className="result-count">{results.length} {results.length === 1 ? 'property' : 'properties'} found{storage === 'r2' ? ' · stored in Cloudflare R2' : ''}</p><SearchMap city={city} query={query} listings={results} onOpen={onOpen} /><div className="cards">{results.map((item) => <ListingCard key={item.id} listing={item} onOpen={onOpen} saved={savedIds.includes(item.id)} onSave={onSave} />)}</div>{!results.length && <div className="empty">No properties match these filters. Try another city or property type.</div>}</section> }
-function Detail({ listing, back }) { if (!listing) return null; return <section className="shell section"><button className="text-button" onClick={back}>← Back to listings</button><div className="detail"><div><div className="detail-image" style={{ '--hue': listing.hue }}><span className="badge">{listing.status === 'pending' ? 'Pending review' : 'Verified'}</span>{listing.photos?.[0] ? <img className="listing-photo" src={listing.photos[0]} alt="" /> : <span className="property-icon">⌂</span>}</div><p className="kicker">{listing.type} · {listing.city}</p><h1 className="page-title">{listing.title}</h1><p className="lead">{listing.description}</p><div className="facts">{listing.beds ? <span>{listing.beds} Bedrooms</span> : null}{listing.baths ? <span>{listing.baths} Bathrooms</span> : null}{listing.size ? <span>{listing.size} m²</span> : null}</div><SearchMap compact city={listing.city} query={listing.neighbourhood} listings={[listing]} /></div><aside><p className="kicker">PRICE</p><h2>{money(listing.price)}</h2><p>per {listing.period}</p><button className="primary">Contact assigned agent</button>{listing.status === 'pending' ? <div className="verified">Awaiting a house finder visit and an engineer review.</div> : <div className="verified">✓ Agent visit and engineer inspection complete.</div>}</aside></div></section> }
+function Detail({ listing, back, member, score, onScore, go }) {
+  const [contact, setContact] = useState(null)
+  const [contactError, setContactError] = useState('')
+  const [opening, setOpening] = useState(false)
+  if (!listing) return null
+  const freeFinder = (score?.freeFinder) || (score?.score >= 5)
+  const openContact = async () => {
+    if (!member) { go('account'); return }
+    setOpening(true)
+    setContactError('')
+    try {
+      const response = await fetch(`/api/listings/${encodeURIComponent(listing.id)}/contact`, { method: 'POST', headers: authHeadersFor(member) })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'The contact could not be opened.')
+      setContact(payload)
+      onScore?.((current) => ({ ...(current || {}), score: payload.score, freeFinder: payload.freeFinder }))
+    } catch (error) {
+      setContactError(error.message || 'The contact could not be opened.')
+    } finally {
+      setOpening(false)
+    }
+  }
+  return <section className="shell section"><button className="text-button" onClick={back}>← Back to listings</button><div className="detail"><div><div className="detail-image" style={{ '--hue': listing.hue }}><span className="badge">{listing.status === 'pending' ? 'Pending review' : 'Verified'}</span>{listing.photos?.[0] ? <img className="listing-photo" src={listing.photos[0]} alt="" /> : <span className="property-icon">⌂</span>}</div><p className="kicker">{listing.type} · {listing.city}</p><h1 className="page-title">{listing.title}</h1><p className="lead">{listing.description}</p><div className="facts">{listing.beds ? <span>{listing.beds} Bedrooms</span> : null}{listing.baths ? <span>{listing.baths} Bathrooms</span> : null}{listing.size ? <span>{listing.size} m²</span> : null}</div><SearchMap compact city={listing.city} query={listing.neighbourhood} listings={[listing]} /></div><aside><p className="kicker">PRICE</p><h2>{money(listing.price)}</h2><p>per {listing.period}</p>{contact ? <div className="verified">{contact.phone ? `Landlord: ${contact.phone}` : 'A house finder will arrange this viewing. Your credits cover the request.'}</div> : <button className="primary" onClick={openContact} disabled={opening}>{!member ? 'Sign in to open contact' : freeFinder ? 'Open contact free' : opening ? 'Opening…' : 'Use 1 credit to open contact'}</button>}{contactError ? <p className="photo-note">{contactError}</p> : null}<p className="credit-hint">{freeFinder ? 'Your referral score opens contacts for free.' : 'Refer a property and a landlord to reach 5 credits and open contacts for free.'}</p>{listing.status === 'pending' ? <div className="verified">Awaiting a house finder visit and an engineer review.</div> : <div className="verified">✓ Agent visit and engineer inspection complete.</div>}</aside></div></section>
+}
 function Agents({ agents: agentList }) { return <section className="shell section"><p className="kicker">HOUSE FINDERS</p><h1 className="page-title">Meet Findam agents</h1><p className="lead">Local representatives who verify properties, arrange viewings and support your move.</p><div className="agent-grid">{agentList.map((agent) => <article className="agent" key={agent.name}><div className="avatar">{agent.initials}</div><h3>{agent.name}</h3><p>{agent.city}</p><strong>★ {agent.rating}</strong><span>{agent.closed} successful moves</span><button className="secondary">Contact agent</button></article>)}</div></section> }
 function ListProperty({ onSaved }) {
   const [sent, setSent] = useState(false)
@@ -167,6 +214,7 @@ function HelpBot({ go, chooseType }) {
     if (value.includes('guest') || value.includes('short let')) return 'Guest houses are furnished stays, usually priced per night. Choose Guest house in the search filters to see them.'
     if (value.includes('list') || value.includes('landlord') || value.includes('photo')) return 'To list a property, submit its title, city, price and room or building photos. We then arrange the agent visit and inspection.'
     if (value.includes('city') || value.includes('location') || value.includes('map')) return 'Findam currently covers Bamenda, Buea and Yaounde. Filter by city or type a neighbourhood, and the listings page shows that place on the map.'
+    if (value.includes('refer') || value.includes('credit') || value.includes('score')) return 'Refer a property or a landlord, then an admin reviews it. Accepted referrals add 2 credits for a property and 3 for a landlord. At 5 credits, property contacts open for free.'
     if (value.includes('agent') || value.includes('contact')) return 'I can help you find a property first, or you can use the contact options below to speak with Findam directly.'
     return 'I can help with finding a home, listing a property, prices, verification, cities and agents. Could you tell me a little more?'
   }

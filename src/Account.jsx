@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { createRealtimeClient } from '@neon/realtime/client'
 import { authClient } from './auth.js'
 
-export default function Account() {
+export default function Account({ onMember }) {
   const [session, setSession] = useState(null)
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -24,6 +24,7 @@ export default function Account() {
       if (result.data?.session && result.data?.user) {
         setSession(result.data.session)
         setUser(result.data.user)
+        onMember?.(result.data.session.token ? { token: result.data.session.token, email: result.data.user.email, name: result.data.user.name } : null)
       }
       setLoading(false)
     }).catch(() => { if (!ignore) setLoading(false) })
@@ -84,6 +85,7 @@ export default function Account() {
     if (sessionResult.data?.session && sessionResult.data?.user) {
       setSession(sessionResult.data.session)
       setUser(sessionResult.data.user)
+      onMember?.(sessionResult.data.session.token ? { token: sessionResult.data.session.token, email: sessionResult.data.user.email, name: sessionResult.data.user.name } : null)
       setPassword('')
     } else {
       setMessage('Account saved. Check your email if a confirmation is required, then sign in.')
@@ -95,6 +97,7 @@ export default function Account() {
     await authClient.signOut()
     setSession(null)
     setUser(null)
+    onMember?.(null)
   }
 
   const saveNote = async (event) => {

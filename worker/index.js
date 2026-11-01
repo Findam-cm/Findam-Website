@@ -1,6 +1,7 @@
 import { seed } from './seed.js'
-import { addActivity, checkPostgres, countAuthUsers } from './db.js'
+import { addActivity, addReferral, checkPostgres, countAuthUsers, creditAccount, listPendingReferrals, openListingContact, reviewReferral } from './db.js'
 import { sealActivity } from './realtime.js'
+import { isAdmin, requireUser } from './session.js'
 
 const TYPES = ['Rent', 'Sale', 'Guest house']
 const MAX_PHOTOS = 6
@@ -9,7 +10,7 @@ const MAX_PHOTO_BYTES = 5 * 1024 * 1024
 const cors = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, POST, OPTIONS',
-  'access-control-allow-headers': 'content-type',
+  'access-control-allow-headers': 'content-type, authorization',
 }
 
 function json(body, status = 200) {
@@ -204,6 +205,57 @@ export default {
       }
     }
 
+    if (url.pathname === '/api/credits' && request.method === 'GET') {
+      if (!env.DATABASE_URL) return json({ error: 'Postgres is not configured.' }, 500)
+      const user = await requireUser(request, env)
+      if (!user) return json({ error: 'Sign in before checking your score.' }, 401)
+      return json({ ...(await creditAccount(env.DATABASE_URL, user.id)), admin: isAdmin(user, env) })
+    }
+
+    if (url.pathname === '/api/admin/referrals' && request.method === 'GET') {
+      if (!env.DATABASE_URL) return json({ error: 'Postgres is not configured.' }, 500)
+      const user = await requireUser(request, env)
+      if (!user) return json({ error: 'Sign in before reviewing referrals.' }, 401)
+      if (!isAdmin(user, env)) return json({ error: 'Only an admin can review referrals.' }, 403)
+      return json({ referrals: await listPendingReferrals(env.DATABASE_URL) })
+    }
+
+    const reviewMatch = url.pathname.match(/^\/api\/admin\/referrals\/([^/]+)$/)
+    if (reviewMatch && request.method === 'POST') {
+      if (!env.DATABASE_URL) return json({ error: 'Postgres is not configured.' }, 500)
+      const user = await requireUser(request, env)
+      if (!user) return json({ error: 'Sign in before reviewing referrals.' }, 401)
+      if (!isAdmin(user, env)) return json({ error: 'Only an admin can review referrals.' }, 403)
+      const body = await request.json().catch(() => ({}))
+      const reviewed = await reviewReferral(env.DATABASE_URL, decodeURIComponent(reviewMatch[1]), body.decision)
+      if (reviewed.error) return json({ error: reviewed.error }, reviewed.status)
+      return json(reviewed)
+    }
+
+    if (url.pathname === '/api/referrals' && request.method === 'POST') {
+      if (!env.DATABASE_URL) return json({ error: 'Postgres is not configured.' }, 500)
+      const user = await requireUser(request, env)
+      if (!user) return json({ error: 'Sign in before sending a referral.' }, 401)
+      const catalog = await readCatalog(env.LISTINGS)
+      const body = await request.json().catch(() => ({}))
+      const saved = await addReferral(env.DATABASE_URL, user, { ...body, cities: catalog.cities })
+      if (saved.error) return json({ error: saved.error, score: saved.score }, saved.status)
+      return json(saved, 201)
+    }
+
+    const contactMatch = url.pathname.match(/^\/api\/listings\/([^/]+)\/contact$/)
+    if (contactMatch && request.method === 'POST') {
+      if (!env.DATABASE_URL) return json({ error: 'Postgres is not configured.' }, 500)
+      const user = await requireUser(request, env)
+      if (!user) return json({ error: 'Sign in to open a property contact.' }, 401)
+      const catalog = await readCatalog(env.LISTINGS)
+      const listing = [...catalog.listings, ...catalog.submissions].find((item) => String(item.id) === decodeURIComponent(contactMatch[1]))
+      if (!listing) return json({ error: 'That property is no longer listed.' }, 404)
+      const opened = await openListingContact(env.DATABASE_URL, user.id, listing.id)
+      if (opened.error) return json(opened, opened.status)
+      return json({ ...opened, phone: listing.phone || null, title: listing.title })
+    }
+
     if (url.pathname === '/api/listings' && request.method === 'GET') {
       const catalog = await readCatalog(env.LISTINGS)
       const listings = [...catalog.listings, ...catalog.submissions].map(publicListing)
@@ -216,6 +268,10 @@ export default {
 
     if (url.pathname.startsWith('/api/photos/') && request.method === 'GET') {
       return servePhoto(url, env.LISTINGS)
+    }
+
+    if (url.pathname === '/' && request.method === 'GET') {
+      return json({ ok: true, site: 'http://127.0.0.1:5173/', message: 'This address is the Findam API. Open the site URL to use the website.' })
     }
 
     return json({ error: 'Not found.' }, 404)

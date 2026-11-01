@@ -22,9 +22,11 @@ if (missing.length) {
   process.exit(1)
 }
 
+const adminEmailKeys = ['EMAIL', 'ADMIN_EMAIL', 'ROOT_ADMIN_EMAIL'].filter((key) => String(map.get(key) || '').trim())
 const api = [
   '# Wrangler reads this file. Keep admin passwords out of it.',
   ...serverKeys.map((key) => `${key}=${map.get(key)}`),
+  ...adminEmailKeys.map((key) => `${key}=${map.get(key)}`),
   '',
 ].join('\n')
 fs.writeFileSync('.env.api', api)

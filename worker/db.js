@@ -182,15 +182,21 @@ export async function reviewReferral(databaseUrl, referralId, decision) {
     if (!updated.length) return { error: 'This referral has already been reviewed.', status: 409 }
     return { ok: true, status: 'rejected' }
   }
-  const updated = await sql`UPDATE referrals SET status = 'accepted' WHERE id = ${id} AND status = 'pending' RETURNING id, user_id, kind, credits`
-  if (!updated.length) return { error: 'This referral has already been reviewed.', status: 409 }
-  const accepted = updated[0]
-  const reason = accepted.kind === 'landlord' ? 'Referred a landlord' : 'Referred a property'
-  await sql`
+  const updated = await sql`
+    WITH accepted AS (
+      UPDATE referrals SET status = 'accepted'
+      WHERE id = ${id} AND status = 'pending'
+      RETURNING id, user_id, kind, credits
+    )
     INSERT INTO credit_ledger (user_id, delta, reason, referral_id)
-    VALUES (${accepted.user_id}, ${accepted.credits}, ${reason}, ${accepted.id})
+    SELECT user_id, credits,
+      CASE WHEN kind = 'landlord' THEN 'Referred a landlord' ELSE 'Referred a property' END,
+      id
+    FROM accepted
+    RETURNING delta
   `
-  return { ok: true, status: 'accepted', credits: accepted.credits }
+  if (!updated.length) return { error: 'This referral has already been reviewed.', status: 409 }
+  return { ok: true, status: 'accepted', credits: updated[0].delta }
 }
 
 export async function openListingContact(databaseUrl, userId, listingId) {
@@ -198,25 +204,46 @@ export async function openListingContact(databaseUrl, userId, listingId) {
   if (!id) return { error: 'Choose a property first.', status: 400 }
   const sql = client(databaseUrl)
   await ensureTables(sql, databaseUrl)
-  const existing = await sql`SELECT listing_id FROM listing_unlocks WHERE user_id = ${userId} AND listing_id = ${id}`
-  const totals = await sql`SELECT coalesce(sum(delta), 0)::int AS score FROM credit_ledger WHERE user_id = ${userId}`
-  let score = totals[0]?.score ?? 0
-  const alreadyOpen = existing.length > 0
-  const freeFinder = score >= CREDIT_RULES.freeAt
-  if (!alreadyOpen && !freeFinder) {
-    if (score < CREDIT_RULES.unlockCost) {
-      return { error: 'Refer a property or a landlord to earn credits before opening a contact.', status: 402, score, freeFinder: false }
-    }
-    await sql`
+  const results = await sql.transaction([
+    sql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`,
+    sql`
       INSERT INTO credit_ledger (user_id, delta, reason, listing_id)
-      VALUES (${userId}, ${-CREDIT_RULES.unlockCost}, ${'Opened a property contact'}, ${id})
-    `
-    score -= CREDIT_RULES.unlockCost
+      SELECT ${userId}, ${-CREDIT_RULES.unlockCost}, ${'Opened a property contact'}, ${id}
+      WHERE NOT EXISTS (
+        SELECT 1 FROM listing_unlocks WHERE user_id = ${userId} AND listing_id = ${id}
+      )
+      AND (SELECT coalesce(sum(delta), 0)::int FROM credit_ledger WHERE user_id = ${userId}) >= ${CREDIT_RULES.unlockCost}
+      AND (SELECT coalesce(sum(delta), 0)::int FROM credit_ledger WHERE user_id = ${userId}) < ${CREDIT_RULES.freeAt}
+      RETURNING id
+    `,
+    sql`
+      INSERT INTO listing_unlocks (user_id, listing_id)
+      SELECT ${userId}, ${id}
+      WHERE EXISTS (
+        SELECT 1 FROM listing_unlocks WHERE user_id = ${userId} AND listing_id = ${id}
+      )
+      OR (SELECT coalesce(sum(delta), 0)::int FROM credit_ledger WHERE user_id = ${userId}) >= ${CREDIT_RULES.freeAt}
+      OR EXISTS (
+        SELECT 1 FROM credit_ledger
+        WHERE user_id = ${userId} AND listing_id = ${id} AND delta = ${-CREDIT_RULES.unlockCost}
+      )
+      ON CONFLICT DO NOTHING
+      RETURNING listing_id
+    `,
+    sql`
+      SELECT listing_id FROM listing_unlocks
+      WHERE user_id = ${userId} AND listing_id = ${id}
+    `,
+    sql`SELECT coalesce(sum(delta), 0)::int AS score FROM credit_ledger WHERE user_id = ${userId}`,
+  ])
+  const opened = results[3]
+  const totals = results[4]
+  const score = totals[0]?.score ?? 0
+  const freeFinder = score >= CREDIT_RULES.freeAt
+  if (!opened.length) {
+    return { error: 'Refer a property or a landlord to earn credits before opening a contact.', status: 402, score, freeFinder }
   }
-  if (!alreadyOpen) {
-    await sql`INSERT INTO listing_unlocks (user_id, listing_id) VALUES (${userId}, ${id}) ON CONFLICT DO NOTHING`
-  }
-  return { ok: true, score, freeFinder: score >= CREDIT_RULES.freeAt, listingId: id }
+  return { ok: true, score, freeFinder, listingId: id }
 }
 
 export async function addActivity(databaseUrl, note) {
@@ -225,6 +252,46 @@ export async function addActivity(databaseUrl, note) {
   const rows = await sql`INSERT INTO activity (note) VALUES (${note}) RETURNING id, note, created_at`
   const counts = await sql`SELECT count(*)::int AS count FROM activity`
   return { row: rows[0], count: counts[0].count }
+}
+
+export async function findAuthUserById(databaseUrl, userId) {
+  const id = String(userId || '').trim()
+  if (!databaseUrl || id.length < 8 || id.length > 80) return null
+  const sql = client(databaseUrl)
+  const rows = await sql`
+    SELECT id, email, name
+    FROM neon_auth."user"
+    WHERE id = ${id}
+      AND banned IS NOT TRUE
+  `
+  if (!rows[0]?.id || !rows[0]?.email) return null
+  return { id: String(rows[0].id), email: String(rows[0].email), name: String(rows[0].name || '') }
+}
+
+export async function findAuthUser(databaseUrl, token) {
+  const value = String(token || '').trim()
+  if (!databaseUrl || value.length < 8) return null
+  const candidates = [value]
+  const dot = value.lastIndexOf('.')
+  if (dot > 1) {
+    const signature = value.slice(dot + 1)
+    if (signature.length === 44 && signature.endsWith('=')) candidates.push(value.slice(0, dot))
+  }
+  const sql = client(databaseUrl)
+  for (const candidate of candidates) {
+    const rows = await sql`
+      SELECT u.id, u.email, u.name
+      FROM neon_auth.session s
+      JOIN neon_auth."user" u ON u.id = s."userId"
+      WHERE s.token = ${candidate}
+        AND s."expiresAt" > now()
+        AND u.banned IS NOT TRUE
+    `
+    if (rows[0]?.id && rows[0]?.email) {
+      return { id: String(rows[0].id), email: String(rows[0].email), name: String(rows[0].name || '') }
+    }
+  }
+  return null
 }
 
 export async function countAuthUsers(databaseUrl) {

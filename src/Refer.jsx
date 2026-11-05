@@ -7,13 +7,14 @@ function authHeaders(member) {
   return member?.token ? { authorization: `Bearer ${member.token}`, 'content-type': 'application/json' } : { 'content-type': 'application/json' }
 }
 
-export default function Refer({ member, onScore }) {
+export default function Refer({ member, onScore, onPublished }) {
   const [account, setAccount] = useState(null)
   const [property, setProperty] = useState(empty)
   const [landlord, setLandlord] = useState(empty)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState('')
   const [queue, setQueue] = useState([])
+  const [listings, setListings] = useState([])
 
   const load = () => {
     if (!member?.token) {
@@ -25,10 +26,14 @@ export default function Refer({ member, onScore }) {
       .then((payload) => {
         setAccount(payload)
         onScore?.(payload)
-        if (!payload.admin) { setQueue([]); return }
-        return fetch('/api/admin/referrals', { headers: authHeaders(member) })
-          .then((response) => response.ok ? response.json() : { referrals: [] })
-          .then((review) => setQueue(review.referrals || []))
+        if (!payload.admin) { setQueue([]); setListings([]); return }
+        return Promise.all([
+          fetch('/api/admin/referrals', { headers: authHeaders(member) }).then((response) => response.ok ? response.json() : { referrals: [] }),
+          fetch('/api/admin/listings', { headers: authHeaders(member) }).then((response) => response.ok ? response.json() : { listings: [] }),
+        ]).then(([review, properties]) => {
+          setQueue(review.referrals || [])
+          setListings(properties.listings || [])
+        })
       })
       .catch(() => setAccount(null))
   }
@@ -95,7 +100,7 @@ export default function Refer({ member, onScore }) {
       </form>
     </div>
     {message ? <p className="photo-note" role="status">{message}</p> : null}
-    {account?.admin ? <AdminQueue queue={queue} busy={busy} onReview={async (id, decision) => {
+    {account?.admin ? <AdminQueue queue={queue} listings={listings} busy={busy} onReview={async (id, decision) => {
       setBusy(id)
       setMessage('')
       try {
@@ -113,14 +118,33 @@ export default function Refer({ member, onScore }) {
       } finally {
         setBusy('')
       }
+    }} onListing={async (id, decision) => {
+      setBusy(id)
+      setMessage('')
+      try {
+        const response = await fetch(`/api/admin/listings/${encodeURIComponent(id)}`, {
+          method: 'POST',
+          headers: authHeaders(member),
+          body: JSON.stringify({ decision }),
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload.error || 'The listing review could not be saved.')
+        setMessage(decision === 'accepted' ? 'Listing accepted. It is now public.' : 'Listing declined. It stays off the public site.')
+        if (decision === 'accepted') onPublished?.()
+        load()
+      } catch (error) {
+        setMessage(error.message || 'The listing review could not be saved.')
+      } finally {
+        setBusy('')
+      }
     }} /> : null}
     {account?.referrals?.length ? <ul className="referral-list">{account.referrals.map((item) => <li key={item.id}><b>{item.kind === 'landlord' ? 'Landlord' : 'Property'}</b> · {item.contact_name}, {item.neighbourhood}<span>{item.status === 'accepted' ? `+${item.credits} accepted` : item.status === 'rejected' ? 'Declined' : 'Waiting for admin'}</span></li>)}</ul> : null}
   </section>
 }
 
-function AdminQueue({ queue, busy, onReview }) {
+function AdminQueue({ queue, listings, busy, onReview, onListing }) {
   return <div className="admin-queue">
-    <h2>Admin review</h2>
+    <h2>Referral review</h2>
     {queue.length ? queue.map((item) => <article key={item.id}>
       <div><b>{item.kind === 'landlord' ? 'Landlord' : 'Property'}</b> · {item.contact_name}<p>{item.neighbourhood}, {item.city} · {item.phone}</p><p>{item.detail}</p><small>{item.user_email} · {item.credits} credits if accepted</small></div>
       <div className="admin-actions">
@@ -128,6 +152,14 @@ function AdminQueue({ queue, busy, onReview }) {
         <button className="secondary" type="button" disabled={busy === item.id} onClick={() => onReview(item.id, 'rejected')}>Decline</button>
       </div>
     </article>) : <p>No referrals are waiting.</p>}
+    <h2>Listing review</h2>
+    {listings.length ? listings.map((item) => <article key={item.id}>
+      <div><b>{item.title}</b><p>{item.neighbourhood}, {item.city} · {item.type}</p><p>{item.phone}</p><small>{item.submittedEmail}</small></div>
+      <div className="admin-actions">
+        <button className="primary" type="button" disabled={busy === item.id} onClick={() => onListing(item.id, 'accepted')}>Accept</button>
+        <button className="secondary" type="button" disabled={busy === item.id} onClick={() => onListing(item.id, 'rejected')}>Decline</button>
+      </div>
+    </article>) : <p>No listings are waiting.</p>}
   </div>
 }
 

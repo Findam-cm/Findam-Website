@@ -5,11 +5,7 @@ export const seed = {
     Buea: { lat: 4.1534, lng: 9.2423 },
     Yaounde: { lat: 3.8667, lng: 11.5167 },
   },
-  agents: [
-    { name: 'Ekwalla Mbua', city: 'Bamenda', rating: '4.8', closed: 34, initials: 'EM' },
-    { name: 'Ngo Bibaine', city: 'Yaounde', rating: '4.9', closed: 27, initials: 'NB' },
-    { name: 'Tabi Etone', city: 'Buea', rating: '4.7', closed: 19, initials: 'TE' },
-  ],
+  agents: [],
   listings: [
     { id: '1', title: '2 Bedroom Apartment', type: 'Rent', city: 'Bamenda', neighbourhood: 'Bambili', lat: 6.006, lng: 10.255, price: 150000, period: 'month', beds: 2, baths: 2, size: 120, hue: 26, featured: true, status: 'published', photos: [], description: 'A bright, secure apartment with a fitted kitchen, private parking and reliable water supply.' },
     { id: '2', title: '3 Bedroom Flat', type: 'Rent', city: 'Yaounde', neighbourhood: 'Melen', lat: 3.8645, lng: 11.4968, price: 200000, period: 'month', beds: 3, baths: 2, size: 150, hue: 204, featured: true, status: 'published', photos: [], description: 'A spacious family flat near the university, with a fenced compound and borehole water.' },

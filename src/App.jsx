@@ -3,6 +3,7 @@ import { cities, desks, listings } from './data.js'
 import SearchMap from './SearchMap.jsx'
 import Account from './Account.jsx'
 import Refer, { authHeadersFor } from './Refer.jsx'
+import Admin from './Admin.jsx'
 import { authClient } from './auth.js'
 
 const money = (value) => `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value / 1000)}k FCFA`
@@ -13,6 +14,7 @@ const PAGES = {
   '/cities': 'agents',
   '/saved': 'saved',
   '/account': 'account',
+  '/admin': 'admin',
   '/list': 'list',
   '/how-it-works': 'workflow',
   '/refer': 'refer',
@@ -79,6 +81,8 @@ function App() {
   listingsRef.current = liveListings
   const [member, setMember] = useState(null)
   const [creditScore, setCreditScore] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [adminAccess, setAdminAccess] = useState('checking')
   useEffect(() => {
     let ignore = false
     fetch('/api/listings')
@@ -97,7 +101,8 @@ function App() {
       const session = result.data?.session
       const user = result.data?.user
       setMember(session?.token && user ? { token: session.token, email: user.email, name: user.name } : null)
-    }).catch(() => {})
+      setAuthReady(true)
+    }).catch(() => { if (!ignore) setAuthReady(true) })
     return () => { ignore = true }
   }, [])
   useEffect(() => {
@@ -109,14 +114,24 @@ function App() {
     document.cookie = `findam_session=${encodeURIComponent(member.token)}; Path=/; Max-Age=604800; SameSite=Lax${secure}`
   }, [member])
   useEffect(() => {
-    if (!member?.token) { setCreditScore(null); return undefined }
+    if (!member?.token) {
+      setCreditScore(null)
+      setAdminAccess(authReady ? 'signed-out' : 'checking')
+      return undefined
+    }
     let ignore = false
+    setAdminAccess('checking')
     fetch('/api/credits', { headers: authHeadersFor(member) })
-      .then((response) => response.ok ? response.json() : null)
-      .then((payload) => { if (!ignore && payload) setCreditScore(payload) })
-      .catch(() => {})
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload.error || 'Admin access could not be verified.')
+        if (ignore) return
+        setCreditScore(payload)
+        setAdminAccess(payload.admin ? 'admin' : 'not-admin')
+      })
+      .catch(() => { if (!ignore) setAdminAccess('unavailable') })
     return () => { ignore = true }
-  }, [member])
+  }, [member, authReady])
   const results = useMemo(() => liveListings.filter((listing) => (!city || listing.city === city) && (!type || listing.type === type) && (!maxPrice || listing.price <= Number(maxPrice) * 1000) && `${listing.title} ${listing.city} ${listing.neighbourhood}`.toLowerCase().includes(query.toLowerCase())), [liveListings, city, type, query, maxPrice])
   useEffect(() => {
     const next = locationState(liveListings)
@@ -151,13 +166,21 @@ function App() {
     localStorage.setItem('findam-saved', JSON.stringify(next))
     return next
   })
+  const refreshPublicListings = async () => {
+    const response = await fetch('/api/listings')
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || !Array.isArray(payload.listings)) {
+      throw new Error(payload.error || 'The public listings could not be refreshed.')
+    }
+    setLiveListings(payload.listings)
+  }
 
   return <>
     <header><div className="nav shell">
       <button className="brand" onClick={() => go('home')}><Logo /></button>
       <button className="menu" onClick={() => setMenuOpen(!menuOpen)} aria-expanded={menuOpen} aria-controls="site-nav" aria-label="Toggle navigation">☰</button>
       <nav id="site-nav" className={menuOpen ? 'open' : ''}>
-        <button className={page === 'home' ? 'active' : ''} onClick={() => go('home')}>Homes</button><button className={(page === 'listings' || page === 'detail') ? 'active' : ''} onClick={showHomes}>Property listings</button><button className={page === 'agents' ? 'active' : ''} onClick={() => go('agents')}>Agent</button><button className={page === 'refer' ? 'active' : ''} onClick={() => go('refer')}>Refer</button><button className={page === 'saved' ? 'active' : ''} onClick={() => go('saved')}>Saved</button><button className={page === 'account' ? 'active' : ''} onClick={() => go('account')}>Account</button>
+        <button className={page === 'home' ? 'active' : ''} onClick={() => go('home')}>Homes</button><button className={(page === 'listings' || page === 'detail') ? 'active' : ''} onClick={showHomes}>Property listings</button><button className={page === 'agents' ? 'active' : ''} onClick={() => go('agents')}>Agent</button><button className={page === 'refer' ? 'active' : ''} onClick={() => go('refer')}>Refer</button>{adminAccess === 'admin' && <button className={page === 'admin' ? 'active' : ''} onClick={() => go('admin')}>Admin</button>}<button className={page === 'saved' ? 'active' : ''} onClick={() => go('saved')}>Saved</button><button className={page === 'account' ? 'active' : ''} onClick={() => go('account')}>Account</button>
       </nav>
       <button className="primary compact" onClick={() => go('list')}>List a property</button>
     </div></header>
@@ -170,11 +193,8 @@ function App() {
       {page === 'workflow' && <Workflow go={go} />}
       {page === 'saved' && <Saved listings={liveListings.filter((listing) => savedIds.includes(listing.id))} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} />}
       {page === 'account' && <Account member={member} onMember={setMember} />}
-      {page === 'refer' && <Refer member={member} onScore={setCreditScore} onPublished={() => {
-        fetch('/api/listings').then((response) => response.ok ? response.json() : null).then((payload) => {
-          if (payload && Array.isArray(payload.listings)) setLiveListings(payload.listings)
-        }).catch(() => {})
-      }} />}
+      {page === 'refer' && <Refer member={member} onScore={setCreditScore} onPublished={refreshPublicListings} />}
+      {page === 'admin' && <Admin member={member} authReady={authReady} access={adminAccess} onPublished={refreshPublicListings} />}
     </main>
     <HelpBot go={go} chooseType={chooseType} />
     <footer><div className="shell footer"><div><Logo /><p>Find verified properties. Move in with confidence.</p></div><div><b>Explore</b><button onClick={() => chooseType('Rent')}>Rent a home</button><button onClick={() => go('agents')}>Agent</button><button onClick={() => go('workflow')}>How it works</button><button onClick={() => go('refer')}>Refer</button></div><div><b>Available cities</b>{cities.map((item) => <span key={item}>{item}</span>)}</div></div><p className="copyright">© {new Date().getFullYear()} FindamCameroon. All rights reserved. Original listing text, the Findam name, and this site layout belong to FindamCameroon. Map imagery is supplied by Google under the Google Maps Platform terms and remains Google’s property.</p></footer>

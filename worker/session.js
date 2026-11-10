@@ -23,10 +23,8 @@ export function allowedOrigins(env) {
 }
 
 export function isAdmin(user, env) {
-  const allowed = [env.EMAIL, env.ADMIN_EMAIL, env.ROOT_ADMIN_EMAIL]
-    .map((value) => String(value || '').trim().toLowerCase())
-    .filter(Boolean)
-  return allowed.includes(String(user?.email || '').trim().toLowerCase())
+  const rootAdminEmail = String(env.ROOT_ADMIN_EMAIL || '').trim().toLowerCase()
+  return Boolean(rootAdminEmail && rootAdminEmail === String(user?.email || '').trim().toLowerCase())
 }
 
 function sessionUser(body) {

@@ -1,9 +1,11 @@
 import { seed } from './seed.js'
-import { addActivity, addReferral, checkPostgres, creditAccount, listPendingReferrals, openListingContact, reviewReferral } from './db.js'
-import { sealActivity } from './realtime.js'
+import { addAlert, addReferral, checkPostgres, creditAccount, deleteAlert, listAlerts, listPendingReferrals, markAlertsSeen, openListingContact, reviewReferral } from './db.js'
 import { allowedOrigins, isAdmin, requireUser } from './session.js'
+import { EMPTY_FILTERS, describeFilters, matchesFilters } from '../src/filters.js'
 
 const TYPES = ['Rent', 'Sale', 'Guest house']
+const MIN_PRICE = 500
+const MAX_PRICE = 10_000_000_000
 const MAX_PHOTOS = 6
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024
 const SAMPLE_IDS = new Set(['1', '2', '3', '4', '5', '6'])
@@ -39,7 +41,49 @@ function isPublicListing(listing) {
 function publicListing(listing) {
   const { phone, submittedBy, submittedEmail, ...visible } = listing
   if (SAMPLE_IDS.has(String(listing.id))) visible.sample = true
+  visible.available = listing.available !== false
   return visible
+}
+
+function wholeNumber(value, max) {
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  const number = Number(text)
+  if (!Number.isInteger(number) || number < 0 || number > max) return undefined
+  return number
+}
+
+// Accepts full FCFA amounts ("150000" or "150,000"). Older pages sent thousands, flagged by a missing priceUnit.
+function readPrice(form) {
+  const raw = Number(String(form.get('price') || '').replace(/[\s,]/g, ''))
+  if (!Number.isFinite(raw) || raw <= 0) return null
+  const amount = form.get('priceUnit') === 'fcfa' ? raw : raw * 1000
+  const rounded = Math.round(amount)
+  return rounded >= MIN_PRICE && rounded <= MAX_PRICE ? rounded : null
+}
+
+function cleanFilters(input) {
+  const f = { ...EMPTY_FILTERS }
+  const source = input && typeof input === 'object' ? input : {}
+  if (seed.cities.includes(source.city)) f.city = source.city
+  if (TYPES.includes(source.type)) f.type = source.type
+  f.query = String(source.query || '').trim().slice(0, 60)
+  const amount = (value) => {
+    const number = Math.round(Number(value))
+    return Number.isFinite(number) && number > 0 && number <= MAX_PRICE ? number : null
+  }
+  f.minPrice = amount(source.minPrice)
+  f.maxPrice = amount(source.maxPrice)
+  f.budgetPeriod = source.budgetPeriod === 'year' ? 'year' : 'month'
+  f.beds = Math.min(Math.max(Math.round(Number(source.beds) || 0), 0), 5)
+  return f
+}
+
+function findListing(catalog, id) {
+  const target = String(id)
+  return catalog.listings.find((item) => String(item.id) === target)
+    || catalog.submissions.find((item) => String(item.id) === target)
+    || null
 }
 
 function photoBytesMatch(type, bytes) {
@@ -84,12 +128,19 @@ async function createListing(request, bucket, user, env, formData) {
   const type = String(form.get('type') || '').trim()
   const neighbourhood = String(form.get('neighbourhood') || '').trim().slice(0, 80)
   const phone = String(form.get('phone') || '').trim().slice(0, 20)
-  const priceThousands = Number(form.get('price'))
+  const price = readPrice(form)
+  const period = type === 'Sale' ? 'sale' : type === 'Guest house' ? 'night' : form.get('period') === 'year' ? 'year' : 'month'
+  const beds = wholeNumber(form.get('beds'), 50)
+  const baths = wholeNumber(form.get('baths'), 50)
+  const size = wholeNumber(form.get('size'), 100000)
+  const details = String(form.get('description') || '').trim().slice(0, 600)
   const catalog = await readCatalog(bucket)
   const knownCity = catalog.cities.includes(city)
-  const validPrice = Number.isFinite(priceThousands) && priceThousands > 0 && priceThousands <= 100000000
-  if (!title || !knownCity || !TYPES.includes(type) || !neighbourhood || phone.length < 8 || !validPrice) {
-    return json({ error: 'Check the title, city, neighbourhood, type, price, and phone number.' }, 400, request, env)
+  if (!title || !knownCity || !TYPES.includes(type) || !neighbourhood || phone.length < 8 || !price) {
+    return json({ error: 'Check the title, city, neighbourhood, type, price (full amount in FCFA), and phone number.' }, 400, request, env)
+  }
+  if (beds === undefined || baths === undefined || size === undefined) {
+    return json({ error: 'Bedrooms, bathrooms and size must be whole numbers.' }, 400, request, env)
   }
 
   const files = form.getAll('photos').filter((file) => file && typeof file.arrayBuffer === 'function' && file.size)
@@ -129,19 +180,20 @@ async function createListing(request, bucket, user, env, formData) {
       neighbourhood,
       lat: center?.lat,
       lng: center?.lng,
-      price: Math.round(priceThousands * 1000),
-      period: type === 'Sale' ? 'sale' : type === 'Guest house' ? 'night' : 'month',
-      beds: null,
-      baths: null,
-      size: null,
+      price,
+      period,
+      beds,
+      baths,
+      size,
       hue: 26,
       featured: false,
       status: 'pending',
+      available: true,
       photos,
       phone,
       submittedBy: user.id,
       submittedEmail: user.email,
-      description: `${title} in ${neighbourhood}, ${city}. Awaiting admin review before it is published.`,
+      description: details || `${title} in ${neighbourhood}, ${city}.`,
       createdAt: new Date().toISOString(),
     })
     await writeCatalog(bucket, latest)
@@ -185,10 +237,48 @@ async function reviewListing(bucket, listingId, decision) {
     if (!listing) return { error: 'That listing was not found.', status: 404 }
     if (listing.status !== 'pending') return { error: 'This listing has already been reviewed.', status: 409 }
     listing.status = decision === 'accepted' ? 'published' : 'rejected'
-    if (decision === 'accepted') listing.featured = false
+    if (decision === 'accepted') {
+      listing.featured = false
+      listing.available = true
+      listing.publishedAt = new Date().toISOString()
+    }
     await writeCatalog(bucket, catalog)
     return { ok: true, status: listing.status }
   })
+}
+
+// The owner who submitted a listing, or the admin, can mark it taken or available again.
+async function setAvailability(bucket, listingId, user, admin, available) {
+  return withCatalog(async () => {
+    const catalog = await readCatalog(bucket)
+    const listing = findListing(catalog, listingId)
+    if (!listing) return { error: 'That listing was not found.', status: 404 }
+    if (!admin && listing.submittedBy !== user.id) return { error: 'Only the owner or an admin can change this listing.', status: 403 }
+    listing.available = Boolean(available)
+    listing.availabilityChangedAt = new Date().toISOString()
+    await writeCatalog(bucket, catalog)
+    return { ok: true, id: String(listing.id), available: listing.available }
+  })
+}
+
+function ownerView(listing) {
+  const { submittedBy, ...visible } = listing
+  return { ...visible, available: listing.available !== false }
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// Homes published after the alert was created that match it. "fresh" ones arrived since the user last looked.
+function alertMatches(catalog, alert) {
+  const seen = Date.parse(alert.seen_at) || 0
+  const created = Date.parse(alert.created_at) || 0
+  return [...catalog.listings, ...catalog.submissions]
+    .filter(isPublicListing)
+    .map((listing) => ({ listing, added: Date.parse(listing.publishedAt || listing.createdAt || '') || 0 }))
+    .filter(({ listing, added }) => added > created && listing.available !== false && matchesFilters(listing, alert.filters))
+    .sort((a, b) => b.added - a.added)
+    .slice(0, 20)
+    .map(({ listing, added }) => ({ ...publicListing(listing), fresh: added > seen }))
 }
 
 export default {
@@ -215,27 +305,63 @@ export default {
       return new Response(text, { status: upstream.status, headers: { ...corsHeaders(request, env), 'content-type': 'text/plain; charset=utf-8' } })
     }
 
-    if (url.pathname === '/api/activity' && request.method === 'POST') {
+    if (url.pathname === '/api/alerts' && request.method === 'GET') {
       if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
       const user = await requireUser(request, env)
-      if (!user) return fail({ error: 'Sign in before saving a note.' }, 401)
-      const body = await request.json().catch(() => ({}))
-      const note = String(body.note || '').trim().slice(0, 120)
-      if (note.length < 2) return fail({ error: 'Add a short note.' }, 400)
-      const saved = await addActivity(env.DATABASE_URL, note)
-      return fail({ ok: true, id: saved.row.id, note: saved.row.note, count: saved.count }, 201)
+      if (!user) return fail({ error: 'Sign in to see your alerts.' }, 401)
+      const [alerts, catalog] = await Promise.all([listAlerts(env.DATABASE_URL, user.id), readCatalog(env.LISTINGS)])
+      const withMatches = alerts.map((alert) => ({ ...alert, matches: alertMatches(catalog, alert) }))
+      const unread = new Set(withMatches.flatMap((alert) => alert.matches.filter((item) => item.fresh).map((item) => String(item.id)))).size
+      return fail({ alerts: withMatches, unread })
     }
 
-    if (url.pathname === '/api/realtime/activity' && request.method === 'POST') {
+    if (url.pathname === '/api/alerts' && request.method === 'POST') {
+      if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
       const user = await requireUser(request, env)
-      if (!user) return fail({ error: 'Sign in before opening live notes.' }, 401)
-      try {
-        const sealed = await sealActivity(env)
-        if (!sealed) return fail({ error: 'Realtime is not configured.' }, 500)
-        return fail(sealed)
-      } catch {
-        return fail({ error: 'Realtime could not seal the query.' }, 500)
-      }
+      if (!user) return fail({ error: 'Sign in to save an alert.' }, 401)
+      const body = await request.json().catch(() => ({}))
+      const filters = cleanFilters(body.filters)
+      const saved = await addAlert(env.DATABASE_URL, user.id, filters, describeFilters(filters).slice(0, 160))
+      if (saved.error) return fail({ error: saved.error }, saved.status)
+      return fail({ alert: { ...saved.alert, matches: [] } }, 201)
+    }
+
+    if (url.pathname === '/api/alerts/seen' && request.method === 'POST') {
+      if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
+      const user = await requireUser(request, env)
+      if (!user) return fail({ error: 'Sign in to update your alerts.' }, 401)
+      return fail(await markAlertsSeen(env.DATABASE_URL, user.id))
+    }
+
+    const alertDelete = url.pathname.match(/^\/api\/alerts\/([^/]+)\/delete$/)
+    if (alertDelete && request.method === 'POST') {
+      if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
+      const user = await requireUser(request, env)
+      if (!user) return fail({ error: 'Sign in to update your alerts.' }, 401)
+      const id = decodeURIComponent(alertDelete[1])
+      if (!UUID.test(id)) return fail({ error: 'That alert was not found.' }, 404)
+      const removed = await deleteAlert(env.DATABASE_URL, user.id, id)
+      if (removed.error) return fail({ error: removed.error }, removed.status)
+      return fail(removed)
+    }
+
+    if (url.pathname === '/api/my/listings' && request.method === 'GET') {
+      const user = await requireUser(request, env)
+      if (!user) return fail({ error: 'Sign in to see your listings.' }, 401)
+      const catalog = await readCatalog(env.LISTINGS)
+      const mine = catalog.submissions.filter((item) => item.submittedBy === user.id).map(ownerView)
+      return fail({ listings: mine.reverse() })
+    }
+
+    const availabilityMatch = url.pathname.match(/^\/api\/listings\/([^/]+)\/availability$/)
+    if (availabilityMatch && request.method === 'POST') {
+      const user = await requireUser(request, env)
+      if (!user) return fail({ error: 'Sign in to update a listing.' }, 401)
+      const body = await request.json().catch(() => ({}))
+      if (typeof body.available !== 'boolean') return fail({ error: 'Say whether the home is available.' }, 400)
+      const changed = await setAvailability(env.LISTINGS, decodeURIComponent(availabilityMatch[1]), user, isAdmin(user, env), body.available)
+      if (changed.error) return fail({ error: changed.error }, changed.status)
+      return fail(changed)
     }
 
     if (url.pathname === '/api/credits' && request.method === 'GET') {
@@ -295,7 +421,23 @@ export default {
       const body = await request.json().catch(() => ({}))
       const saved = await addReferral(env.DATABASE_URL, user, { ...body, cities: catalog.cities })
       if (saved.error) return fail({ error: saved.error, score: saved.score }, saved.status)
-      return fail(saved, 201)
+      // One form can also introduce the property's landlord, which is saved as its own referral.
+      const landlord = body.landlord && typeof body.landlord === 'object' ? body.landlord : null
+      if (body.kind !== 'property' || !landlord) return fail(saved, 201)
+      const landlordSaved = await addReferral(env.DATABASE_URL, user, {
+        kind: 'landlord',
+        contactName: landlord.sameAsContact ? body.contactName : landlord.contactName,
+        phone: landlord.sameAsContact ? body.phone : landlord.phone,
+        city: body.city,
+        neighbourhood: body.neighbourhood,
+        detail: `Landlord of the property referred together: ${String(body.detail || '').slice(0, 180)}`,
+        cities: catalog.cities,
+      })
+      if (landlordSaved.error) {
+        const account = await creditAccount(env.DATABASE_URL, user.id)
+        return fail({ ...account, referral: saved.referral, landlordError: landlordSaved.error }, 201)
+      }
+      return fail({ ...landlordSaved, referral: saved.referral, landlordReferral: landlordSaved.referral }, 201)
     }
 
     const contactMatch = url.pathname.match(/^\/api\/listings\/([^/]+)\/contact$/)
@@ -306,6 +448,7 @@ export default {
       const catalog = await readCatalog(env.LISTINGS)
       const listing = [...catalog.listings, ...catalog.submissions].find((item) => String(item.id) === decodeURIComponent(contactMatch[1]))
       if (!listing || !isPublicListing(listing)) return fail({ error: 'That property is no longer listed.' }, 404)
+      if (listing.available === false) return fail({ error: 'This home has been taken, so its contact is closed. No credit was used.' }, 410)
       if (listing.sample || SAMPLE_IDS.has(String(listing.id)) || !listing.phone) {
         const account = await creditAccount(env.DATABASE_URL, user.id)
         return fail({

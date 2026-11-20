@@ -1,101 +1,88 @@
 import { useEffect, useState } from 'react'
-import { createRealtimeClient } from '@neon/realtime/client'
 import { authClient } from './auth.js'
+import { authHeadersFor } from './Refer.jsx'
+import { Modal, PasswordInput } from './ui.jsx'
+import { priceLine } from './price.js'
 
-export default function Account({ member, onMember }) {
-  const [session, setSession] = useState(null)
-  const [user, setUser] = useState(null)
+function initialMode() {
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('token')) return 'reset'
+  if (params.get('error') === 'INVALID_TOKEN') return 'forgot'
+  if (params.get('mode') === 'signin') return 'signin'
+  return 'signup'
+}
+
+const TITLES = {
+  signup: ['Create your Findam account', 'Free to join. Save homes, get alerts when new homes match your search, list a property and earn credits.'],
+  signin: ['Welcome back', 'Sign in to see your saved homes, alerts, listings and credits.'],
+  forgot: ['Reset your password', 'Enter the email on your account. We will send a link to choose a new password.'],
+  reset: ['Choose a new password', 'Enter a new password for your account.'],
+}
+
+function friendlyError(error, mode) {
+  const text = String(error?.message || error?.statusText || '')
+  if (/already exists|already registered|in use/i.test(text)) return 'This email already has an account. Use Sign in instead.'
+  if (/invalid (email or )?password|invalid credentials|incorrect/i.test(text)) return 'That email and password do not match. Check them, or reset your password.'
+  if (/password.*(short|least)/i.test(text)) return 'Use a password of at least 8 characters.'
+  if (/too many/i.test(text)) return 'Too many attempts. Wait a minute, then try again.'
+  return text || (mode === 'signup' ? 'Your account could not be created. Try again.' : 'Sign in failed. Try again.')
+}
+
+export default function Account({ member, onMember, score, savedCount, alertCount, go }) {
   const [loading, setLoading] = useState(true)
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('token') || '')
-  const [mode, setMode] = useState(() => {
-    const params = new URLSearchParams(window.location.search)
-    if (params.get('token')) return 'reset'
-    if (params.get('error') === 'INVALID_TOKEN') return 'forgot'
-    return 'signup'
-  })
+  const [mode, setMode] = useState(initialMode)
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [nextPassword, setNextPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
   const [message, setMessage] = useState(() => new URLSearchParams(window.location.search).get('error') === 'INVALID_TOKEN' ? 'This reset link has expired. Request a new one.' : '')
   const [busy, setBusy] = useState(false)
-  const [notes, setNotes] = useState([])
-  const [liveStatus, setLiveStatus] = useState('connecting')
-  const [note, setNote] = useState('')
+  const [welcome, setWelcome] = useState(null)
 
   useEffect(() => {
     let ignore = false
     authClient.getSession().then((result) => {
       if (ignore) return
-      if (result.data?.session && result.data?.user) {
-        setSession(result.data.session)
-        setUser(result.data.user)
-        onMember?.(result.data.session.token ? { token: result.data.session.token, email: result.data.user.email, name: result.data.user.name } : null)
-      }
+      const session = result.data?.session
+      const user = result.data?.user
+      if (session?.token && user) onMember?.({ token: session.token, email: user.email, name: user.name })
       setLoading(false)
     }).catch(() => { if (!ignore) setLoading(false) })
     return () => { ignore = true }
   }, [])
 
-  useEffect(() => {
-    const url = import.meta.env.VITE_NEON_REALTIME_URL
-    if (!url || !member?.token) {
-      setLiveStatus(member?.token ? 'connecting' : 'signed-out')
-      setNotes([])
-      return undefined
-    }
-    let stop = () => {}
-    let client
-    let ignore = false
-    fetch('/api/realtime/activity', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { authorization: `Bearer ${member.token}` },
-    })
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((sealed) => {
-        if (ignore) return
-        client = createRealtimeClient({ url })
-        const subscription = client.subscribe(sealed)
-        stop = subscription.onChange(({ data, status, error }) => {
-          if (error) {
-            setLiveStatus('unavailable')
-            return
-          }
-          setLiveStatus(status || 'live')
-          if (Array.isArray(data)) setNotes(data)
-        })
-      })
-      .catch(() => { if (!ignore) setLiveStatus('unavailable') })
-    return () => {
-      ignore = true
-      stop()
-      client?.close()
-    }
-  }, [member?.token])
+  const switchMode = (next) => { setMode(next); setMessage(''); setPassword(''); setConfirm('') }
 
   const submit = async (event) => {
     event.preventDefault()
+    if (mode === 'signup' && password !== confirm) { setMessage('The two passwords do not match.'); return }
     setBusy(true)
     setMessage('')
     try {
+      const cleanName = name.trim()
       const result = mode === 'signup'
-        ? await authClient.signUp.email({ name: name.trim() || email.split('@')[0] || 'Member', email, password })
-        : await authClient.signIn.email({ email, password })
+        ? await authClient.signUp.email({ name: cleanName || email.split('@')[0] || 'Member', email: email.trim(), password })
+        : await authClient.signIn.email({ email: email.trim(), password })
       if (result?.error) throw result.error
       const sessionResult = await authClient.getSession()
-      if (sessionResult.data?.session && sessionResult.data?.user) {
-        setSession(sessionResult.data.session)
-        setUser(sessionResult.data.user)
-        onMember?.(sessionResult.data.session.token ? { token: sessionResult.data.session.token, email: sessionResult.data.user.email, name: sessionResult.data.user.name } : null)
-        setPassword('')
+      const session = sessionResult.data?.session
+      const user = sessionResult.data?.user
+      setPassword('')
+      setConfirm('')
+      if (session?.token && user) {
+        onMember?.({ token: session.token, email: user.email, name: user.name })
+        if (mode === 'signup') setWelcome({ name: user.name || cleanName, email: user.email, signedIn: true })
+      } else if (mode === 'signup') {
+        setWelcome({ name: cleanName, email: email.trim(), signedIn: false })
+        setMode('signin')
       } else {
-        setMessage('Account saved. Check your email if a confirmation is required, then sign in.')
+        setMessage('Signed in, but the session could not be read. Reload the page.')
       }
     } catch (error) {
-      const text = error?.message || 'The account request was rejected.'
-      setMessage(/already exists/i.test(text) ? 'This email already has an account. Choose Sign in below.' : text)
+      setMessage(friendlyError(error, mode))
     } finally {
       setBusy(false)
     }
@@ -106,10 +93,7 @@ export default function Account({ member, onMember }) {
     setBusy(true)
     setMessage('')
     try {
-      const result = await authClient.requestPasswordReset({
-        email,
-        redirectTo: `${window.location.origin}/account`,
-      })
+      const result = await authClient.requestPasswordReset({ email: email.trim(), redirectTo: `${window.location.origin}/account` })
       if (result?.error) throw result.error
       setMessage('If that email has an account, we sent a reset link. Open it to choose a new password.')
     } catch (error) {
@@ -121,24 +105,18 @@ export default function Account({ member, onMember }) {
 
   const savePassword = async (event) => {
     event.preventDefault()
-    if (nextPassword !== confirmPassword) {
-      setMessage('The two passwords do not match.')
-      return
-    }
+    if (password !== confirm) { setMessage('The two passwords do not match.'); return }
     setBusy(true)
     setMessage('')
     try {
-      const result = await authClient.resetPassword({ newPassword: nextPassword, token: resetToken })
+      const result = await authClient.resetPassword({ newPassword: password, token: resetToken })
       if (result?.error) throw result.error
       const url = new URL(window.location.href)
       url.searchParams.delete('token')
       url.searchParams.delete('error')
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
       setResetToken('')
-      setMode('signin')
-      setPassword('')
-      setNextPassword('')
-      setConfirmPassword('')
+      switchMode('signin')
       setMessage('Password updated. Sign in with your new password.')
     } catch (error) {
       const text = error?.message || 'The reset link could not be used.'
@@ -149,65 +127,118 @@ export default function Account({ member, onMember }) {
   }
 
   const signOut = async () => {
-    await authClient.signOut()
-    setSession(null)
-    setUser(null)
+    await authClient.signOut().catch(() => {})
     onMember?.(null)
+    switchMode('signin')
   }
 
-  const saveNote = async (event) => {
-    event.preventDefault()
-    const text = note.trim()
-    if (text.length < 2 || !member?.token) return
-    setNote('')
-    await fetch('/api/activity', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${member.token}` },
-      body: JSON.stringify({ note: text }),
-    })
-  }
+  const welcomeModal = welcome ? <Modal
+    title={welcome.signedIn ? 'Your account has been created' : 'Account created'}
+    onClose={() => setWelcome(null)}
+    actions={welcome.signedIn
+      ? <><button className="primary" autoFocus onClick={() => { setWelcome(null); go('listings') }}>Browse homes</button><button className="secondary" onClick={() => setWelcome(null)}>Go to my account</button></>
+      : <button className="primary" autoFocus onClick={() => setWelcome(null)}>Sign in now</button>}
+  >
+    <p>{welcome.signedIn ? <>Welcome to Findam{welcome.name ? `, ${welcome.name}` : ''}! You are signed in as <b>{welcome.email}</b>.</> : <>We saved your account for <b>{welcome.email}</b>. Sign in with the password you just chose.</>}</p>
+  </Modal> : null
 
-  return <section className="shell section">
+  if (loading) return <section className="shell section narrow"><p role="status">Checking your session…</p></section>
+
+  if (member && mode !== 'reset') return <section className="shell section">
+    {welcomeModal}
     <p className="kicker">YOUR ACCOUNT</p>
-    <h1 className="page-title">{mode === 'forgot' ? 'Reset your password' : mode === 'reset' ? 'Choose a new password' : 'Sign in to Findam'}</h1>
-    <p className="lead">{mode === 'forgot' ? 'Enter the email on your account. We will send a link to choose a new password.' : mode === 'reset' ? 'Enter a new password for your account.' : 'Save a shortlist, list a property, and follow new notes as they are saved.'}</p>
-    {loading ? <p>Checking your session…</p> : session && user && mode !== 'reset' ? (
-      <div className="success"><p>Signed in as {user.email}</p><button className="secondary" onClick={signOut}>Sign out</button></div>
-    ) : mode === 'reset' ? (
-      <form className="property-form account-form stack" onSubmit={savePassword}>
-        <label>New password<input id="account-new-password" type="password" autoComplete="new-password" required minLength="8" value={nextPassword} onChange={(event) => setNextPassword(event.target.value)} /></label>
-        <label>Confirm password<input id="account-confirm-password" type="password" autoComplete="new-password" required minLength="8" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
-        <button className="primary" disabled={busy}>{busy ? 'Please wait…' : 'Save new password'}</button>
-        <button type="button" className="text-button" onClick={() => { setMode('forgot'); setMessage('') }}>Request a new link</button>
-        {message ? <p className="photo-note" role="alert">{message}</p> : null}
-      </form>
-    ) : mode === 'forgot' ? (
-      <form className="property-form account-form stack" onSubmit={requestReset}>
-        <label>Email<input id="account-reset-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-        <button className="primary" disabled={busy}>{busy ? 'Please wait…' : 'Send reset link'}</button>
-        <button type="button" className="text-button" onClick={() => { setMode('signin'); setMessage('') }}>Back to sign in</button>
-        {message ? <p className="photo-note" role="status">{message}</p> : null}
-      </form>
-    ) : (
-      <form className="property-form account-form" onSubmit={submit}>
-        {mode === 'signup' ? <label>Name<input id="account-name" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} /></label> : null}
-        <label>Email<input id="account-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-        <label>Password<input id="account-password" type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} required minLength="8" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
-        <button className="primary" disabled={busy}>{busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}</button>
-        {mode === 'signin' ? <button type="button" className="text-button" onClick={() => { setMode('forgot'); setMessage('') }}>Forgot password?</button> : null}
-        <button type="button" className="text-button" onClick={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setMessage('') }}>{mode === 'signup' ? 'Already have an account? Sign in' : 'New here? Create an account'}</button>
-        {message ? <p className="photo-note" role="alert">{message}</p> : null}
-      </form>
-    )}
-    <div className="account-live">
-      <h2>Live notes</h2>
-      <p>Notes show up here as soon as they change. Status: {liveStatus}.</p>
-      {member?.token ? <form className="route-bar" onSubmit={saveNote}>
-        <label>Note<input id="activity-note" value={note} onChange={(event) => setNote(event.target.value)} maxLength="120" placeholder="e.g. Viewing in Molyko tomorrow" /></label>
-        <button className="primary" type="submit">Save note</button>
-      </form> : <p className="photo-note">Sign in to read and save live notes.</p>}
-      <ul>{notes.map((item) => <li key={item.id}>{item.note}</li>)}</ul>
+    <div className="profile-card">
+      <div className="profile-avatar" aria-hidden="true">{(member.name || member.email || '?').trim().charAt(0).toUpperCase()}</div>
+      <div><h1>{member.name || 'Findam member'}</h1><p>{member.email}</p></div>
+      <button className="secondary" onClick={signOut}>Sign out</button>
     </div>
+    <div className="stat-grid">
+      <button type="button" className="stat" onClick={() => go('refer')}><strong>{score?.score ?? 0}</strong><span>Credits</span><small>{score?.freeFinder ? 'Contacts open free' : 'Refer homes to earn more'}</small></button>
+      <button type="button" className="stat" onClick={() => go('saved')}><strong>{savedCount}</strong><span>Saved homes</span><small>Your shortlist</small></button>
+      <button type="button" className="stat" onClick={() => go('alerts')}><strong>{alertCount}</strong><span>Home alerts</span><small>New matches are announced</small></button>
+    </div>
+    <MyListings member={member} go={go} />
   </section>
+
+  const [title, lead] = TITLES[mode]
+  return <section className="shell section narrow">
+    {welcomeModal}
+    <p className="kicker">YOUR ACCOUNT</p>
+    <h1 className="page-title">{title}</h1>
+    <p className="lead">{lead}</p>
+    {mode === 'signup' || mode === 'signin' ? <div className="auth-tabs" role="tablist" aria-label="Account">
+      <button type="button" role="tab" aria-selected={mode === 'signup'} className={mode === 'signup' ? 'selected' : ''} onClick={() => switchMode('signup')}>Create account</button>
+      <button type="button" role="tab" aria-selected={mode === 'signin'} className={mode === 'signin' ? 'selected' : ''} onClick={() => switchMode('signin')}>Sign in</button>
+    </div> : null}
+
+    {mode === 'reset' ? <form className="auth-form" onSubmit={savePassword}>
+      <label htmlFor="account-new-password">New password</label>
+      <PasswordInput id="account-new-password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} shown={showPassword} onToggle={() => setShowPassword(!showPassword)} />
+      <label htmlFor="account-confirm-password">Confirm new password</label>
+      <PasswordInput id="account-confirm-password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} shown={showConfirm} onToggle={() => setShowConfirm(!showConfirm)} />
+      <button className="primary" disabled={busy}>{busy ? 'Please wait…' : 'Save new password'}</button>
+      <button type="button" className="text-button" onClick={() => switchMode('forgot')}>Request a new link</button>
+      {message ? <p className="form-message" role="alert">{message}</p> : null}
+    </form> : mode === 'forgot' ? <form className="auth-form" onSubmit={requestReset}>
+      <label htmlFor="account-reset-email">Email</label>
+      <input id="account-reset-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
+      <button className="primary" disabled={busy}>{busy ? 'Please wait…' : 'Send reset link'}</button>
+      <button type="button" className="text-button" onClick={() => switchMode('signin')}>Back to sign in</button>
+      {message ? <p className="form-message" role="status">{message}</p> : null}
+    </form> : <form className="auth-form" onSubmit={submit} noValidate={false}>
+      {mode === 'signup' ? <><label htmlFor="account-name">Full name</label><input id="account-name" autoComplete="name" required minLength="2" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Kum Terence" /></> : null}
+      <label htmlFor="account-email">Email</label>
+      <input id="account-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" />
+      <label htmlFor="account-password">Password</label>
+      <PasswordInput id="account-password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} shown={showPassword} onToggle={() => setShowPassword(!showPassword)} />
+      {mode === 'signup' ? <>
+        <small className={`field-hint${password && password.length < 8 ? ' warn' : ''}`}>{password.length >= 8 ? '✓ At least 8 characters' : 'Use at least 8 characters'}</small>
+        <label htmlFor="account-confirm">Confirm password</label>
+        <PasswordInput id="account-confirm" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} shown={showConfirm} onToggle={() => setShowConfirm(!showConfirm)} />
+        {confirm ? <small className={`field-hint${confirm === password ? '' : ' warn'}`}>{confirm === password ? '✓ Passwords match' : 'Passwords do not match yet'}</small> : null}
+      </> : null}
+      <button className="primary" disabled={busy}>{busy ? 'Please wait…' : mode === 'signup' ? 'Create my account' : 'Sign in'}</button>
+      {mode === 'signin' ? <button type="button" className="text-button" onClick={() => switchMode('forgot')}>Forgot your password?</button> : null}
+      <p className="auth-switch">{mode === 'signup' ? <>Already have an account? <button type="button" className="text-button" onClick={() => switchMode('signin')}>Sign in</button></> : <>New to Findam? <button type="button" className="text-button" onClick={() => switchMode('signup')}>Create an account</button></>}</p>
+      {message ? <p className="form-message" role="alert">{message}</p> : null}
+    </form>}
+  </section>
+}
+
+function MyListings({ member, go }) {
+  const [listings, setListings] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+
+  const load = () => fetch('/api/my/listings', { headers: authHeadersFor(member) })
+    .then((response) => response.ok ? response.json() : Promise.reject())
+    .then((payload) => setListings(payload.listings || []))
+    .catch(() => setListings([]))
+
+  useEffect(() => { load() }, [member?.token])
+
+  const toggle = async (item) => {
+    setBusy(item.id)
+    setError('')
+    try {
+      const response = await fetch(`/api/listings/${encodeURIComponent(item.id)}/availability`, { method: 'POST', headers: authHeadersFor(member), body: JSON.stringify({ available: !item.available }) })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'The listing could not be updated.')
+      await load()
+    } catch (toggleError) {
+      setError(toggleError.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return <div className="my-listings">
+    <div className="section-head"><h2>Your listings</h2><button className="primary" onClick={() => go('list')}>List a property</button></div>
+    {error ? <p className="admin-error" role="alert">{error}</p> : null}
+    {listings === null ? <p role="status">Loading your listings…</p> : listings.length ? <ul className="owner-list">{listings.map((item) => <li key={item.id}>
+      <div><b>{item.title}</b><small>{item.neighbourhood}, {item.city} · {priceLine(item)}</small></div>
+      <span className={`status-pill ${item.status === 'published' ? (item.available ? 'live' : 'taken') : item.status}`}>{item.status === 'published' ? (item.available ? 'Live' : 'Taken') : item.status === 'pending' ? 'Waiting for review' : 'Declined'}</span>
+      {item.status === 'published' ? <button type="button" className="secondary" disabled={busy === item.id} onClick={() => toggle(item)}>{busy === item.id ? 'Saving…' : item.available ? 'Mark as taken' : 'Mark as available'}</button> : null}
+    </li>)}</ul> : <p className="muted">You have not listed a property yet. When your home is rented or sold, mark it as taken here so house seekers stop calling.</p>}
+  </div>
 }

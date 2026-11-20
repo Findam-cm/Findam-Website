@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { authHeadersFor } from './Refer.jsx'
+import { priceLine } from './price.js'
 
 export default function Admin({ member, authReady, access, onPublished }) {
   const [referrals, setReferrals] = useState([])
   const [listings, setListings] = useState([])
+  const [published, setPublished] = useState([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
@@ -14,18 +16,21 @@ export default function Admin({ member, authReady, access, onPublished }) {
     setError('')
     try {
       const headers = authHeadersFor(member)
-      const [referralResponse, listingResponse] = await Promise.all([
+      const [referralResponse, listingResponse, publicResponse] = await Promise.all([
         fetch('/api/admin/referrals', { headers }),
         fetch('/api/admin/listings', { headers }),
+        fetch('/api/listings'),
       ])
-      const [referralPayload, listingPayload] = await Promise.all([
+      const [referralPayload, listingPayload, publicPayload] = await Promise.all([
         referralResponse.json(),
         listingResponse.json(),
+        publicResponse.json().catch(() => ({})),
       ])
       if (!referralResponse.ok) throw new Error(referralPayload.error || 'Could not load referral reviews.')
       if (!listingResponse.ok) throw new Error(listingPayload.error || 'Could not load listing reviews.')
       setReferrals(referralPayload.referrals || [])
       setListings(listingPayload.listings || [])
+      setPublished(publicPayload.listings || [])
     } catch (loadError) {
       setError(loadError.message || 'The admin dashboard could not be loaded.')
     } finally {
@@ -36,6 +41,28 @@ export default function Admin({ member, authReady, access, onPublished }) {
   useEffect(() => {
     if (access === 'admin') load()
   }, [member?.token, access])
+
+  const setAvailable = async (item) => {
+    setBusy(String(item.id))
+    setMessage('')
+    setError('')
+    try {
+      const response = await fetch(`/api/listings/${encodeURIComponent(item.id)}/availability`, {
+        method: 'POST',
+        headers: authHeadersFor(member),
+        body: JSON.stringify({ available: item.available === false }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'The listing could not be updated.')
+      setMessage(payload.available ? `"${item.title}" is available again.` : `"${item.title}" is marked as taken and hidden from search.`)
+      await load()
+      await onPublished?.()
+    } catch (updateError) {
+      setError(updateError.message || 'The listing could not be updated.')
+    } finally {
+      setBusy('')
+    }
+  }
 
   const review = async (kind, id, decision) => {
     const endpoint = kind === 'listing' ? 'listings' : 'referrals'
@@ -111,7 +138,7 @@ export default function Admin({ member, authReady, access, onPublished }) {
           {loading && !listings.length ? <p>Loading listings…</p> : listings.length ? listings.map((item) => <article key={item.id}>
             <div>
               <b>{item.title}</b>
-              <p>{item.neighbourhood}, {item.city} · {item.type} · {new Intl.NumberFormat('en-US').format(item.price)} FCFA</p>
+              <p>{item.neighbourhood}, {item.city} · {item.type} · {priceLine(item)}{item.beds ? ` · ${item.beds} beds` : ''}</p>
               <p>{item.phone}</p>
               <small>Submitted by {item.submittedEmail || 'unknown account'}</small>
               {item.description ? <p>{item.description}</p> : null}
@@ -135,6 +162,19 @@ export default function Admin({ member, authReady, access, onPublished }) {
               <button className="secondary" type="button" disabled={busy === item.id} onClick={() => review('referral', item.id, 'rejected')}>Decline</button>
             </div>
           </article>) : <p>No referrals are waiting for review.</p>}
+
+          <h2>Published homes <span>{published.length}</span></h2>
+          <p className="muted">Mark a home as taken once it is rented or sold. It disappears from search and alerts, and its contact closes.</p>
+          {published.map((item) => <article key={item.id}>
+            <div>
+              <b>{item.title}{item.sample ? ' (sample)' : ''}</b>
+              <p>{item.neighbourhood}, {item.city} · {priceLine(item)}</p>
+              <span className={`status-pill ${item.available === false ? 'taken' : 'live'}`}>{item.available === false ? 'Taken' : 'Available'}</span>
+            </div>
+            <div className="admin-actions">
+              <button className={item.available === false ? 'primary' : 'secondary'} type="button" disabled={busy === String(item.id)} onClick={() => setAvailable(item)}>{busy === String(item.id) ? 'Saving…' : item.available === false ? 'Mark available' : 'Mark as taken'}</button>
+            </div>
+          </article>)}
         </div>
       </>
     )}

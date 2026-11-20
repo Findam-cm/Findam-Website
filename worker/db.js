@@ -88,7 +88,58 @@ async function ensureTables(sql, databaseUrl) {
       PRIMARY KEY (user_id, listing_id)
     )
   `
+  await sql`
+    CREATE TABLE IF NOT EXISTS search_alerts (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id text NOT NULL,
+      filters jsonb NOT NULL,
+      label text NOT NULL,
+      seen_at timestamptz NOT NULL DEFAULT now(),
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `
   readyFor = databaseUrl
+}
+
+export const MAX_ALERTS = 10
+
+export async function listAlerts(databaseUrl, userId) {
+  const sql = client(databaseUrl)
+  await ensureTables(sql, databaseUrl)
+  return sql`
+    SELECT id, filters, label, seen_at, created_at
+    FROM search_alerts
+    WHERE user_id = ${userId}
+    ORDER BY created_at DESC
+  `
+}
+
+export async function addAlert(databaseUrl, userId, filters, label) {
+  const sql = client(databaseUrl)
+  await ensureTables(sql, databaseUrl)
+  const rows = await sql`
+    INSERT INTO search_alerts (user_id, filters, label)
+    SELECT ${userId}, ${JSON.stringify(filters)}::jsonb, ${label}
+    WHERE (SELECT count(*) FROM search_alerts WHERE user_id = ${userId}) < ${MAX_ALERTS}
+    RETURNING id, filters, label, seen_at, created_at
+  `
+  if (!rows.length) return { error: `You can keep up to ${MAX_ALERTS} alerts. Delete one first.`, status: 409 }
+  return { alert: rows[0] }
+}
+
+export async function deleteAlert(databaseUrl, userId, alertId) {
+  const sql = client(databaseUrl)
+  await ensureTables(sql, databaseUrl)
+  const rows = await sql`DELETE FROM search_alerts WHERE id = ${String(alertId)} AND user_id = ${userId} RETURNING id`
+  if (!rows.length) return { error: 'That alert was not found.', status: 404 }
+  return { ok: true }
+}
+
+export async function markAlertsSeen(databaseUrl, userId) {
+  const sql = client(databaseUrl)
+  await ensureTables(sql, databaseUrl)
+  await sql`UPDATE search_alerts SET seen_at = now() WHERE user_id = ${userId}`
+  return { ok: true }
 }
 
 export const CREDIT_RULES = {

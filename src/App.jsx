@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Gallery, { preparePhoto } from './Gallery.jsx'
 import { cities, desks, listings } from './data.js'
 import SearchMap from './SearchMap.jsx'
 import Account from './Account.jsx'
@@ -7,9 +8,12 @@ import Admin from './Admin.jsx'
 import Listings from './Listings.jsx'
 import Notifications from './Notifications.jsx'
 import { authClient } from './auth.js'
-import { Link, ListingCard, Modal, Photo, PriceInput, statusBadge } from './ui.jsx'
+import { Link, ListingCard, Modal, PriceInput, statusBadge } from './ui.jsx'
 import { filtersFromSearch, filtersToSearch, homesLink, isAvailable, matchesFilters, sortListings } from './filters.js'
 import { PERIODS, budgetHint, budgetLabel, formatFcfa, priceLine } from './price.js'
+
+const ExactMap = lazy(() => import('./ExactMap.jsx'))
+const LocationPicker = lazy(() => import('./LocationPicker.jsx'))
 
 const PAGES = {
   '/': 'home',
@@ -322,7 +326,7 @@ function App() {
       {page === 'listings' && <Listings results={results} filters={filters} update={updateFilters} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} onAlert={createAlert} alertState={alertState} />}
       {page === 'detail' && <Detail listing={selected} loaded={catalogLoaded} all={liveListings} back={backToListings} member={member} score={creditScore} onScore={setCreditScore} go={go} navigate={navigate} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} />}
       {page === 'agents' && <Agents navigate={navigate} />}
-      {page === 'list' && <ListProperty member={member} go={go} onMember={setMember} />}
+      {page === 'list' && <ListProperty member={member} go={go} onMember={setMember} isAdmin={adminAccess === 'admin'} />}
       {page === 'workflow' && <Workflow go={go} />}
       {page === 'saved' && <Saved listings={liveListings.filter((listing) => savedIds.includes(listing.id))} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} />}
       {page === 'account' && <Account member={member} onMember={setMember} score={creditScore} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} />}
@@ -412,8 +416,7 @@ function Detail({ listing, loaded, all, back, member, score, onScore, go, naviga
   const [contactError, setContactError] = useState('')
   const [opening, setOpening] = useState(false)
   const [showMap, setShowMap] = useState(false)
-  const [photo, setPhoto] = useState(0)
-  useEffect(() => { setContact(null); setContactError(''); setShowMap(false); setPhoto(0) }, [listing?.id])
+  useEffect(() => { setContact(null); setContactError(''); setShowMap(false) }, [listing?.id])
   if (!listing && !loaded) return <section className="shell section"><p role="status" className="muted">Loading this home…</p></section>
   if (!listing) return <section className="shell section"><div className="empty"><h2>This home is no longer listed</h2><p>It may have been taken or removed.</p><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link></div></section>
   const available = isAvailable(listing)
@@ -446,21 +449,21 @@ function Detail({ listing, loaded, all, back, member, score, onScore, go, naviga
     </ol></div>
     <button className="text-button back" onClick={back}>← Back to results</button>
     <div className="detail"><div>
-      <div className={`detail-image${available ? '' : ' is-taken'}`} style={{ '--hue': listing.hue }}>
+      <Gallery photos={photos} title={listing.title} hue={listing.hue} taken={!available} overlay={<>
         <span className={`badge ${badge.tone}`}>{badge.text}</span>
         <button type="button" className={`heart ${savedIds.includes(listing.id) ? 'saved' : ''}`} onClick={() => onSave(listing.id)} aria-label={savedIds.includes(listing.id) ? 'Remove from saved' : 'Save property'} aria-pressed={savedIds.includes(listing.id)}>{savedIds.includes(listing.id) ? '♥' : '♡'}</button>
-        <Photo src={photos[photo]} alt={`${listing.title}, photo ${photo + 1} of ${photos.length}`} />
-      </div>
-      {photos.length > 1 ? <div className="thumbs">{photos.map((src, index) => <button type="button" key={src} className={index === photo ? 'selected' : ''} onClick={() => setPhoto(index)} aria-label={`Show photo ${index + 1}`}><img src={src} alt="" /></button>)}</div> : null}
+      </>} />
       <p className="kicker">{listing.type} · {listing.neighbourhood}, {listing.city}</p>
       <h1 className="page-title">{listing.title}</h1>
       <p className="lead">{listing.description}</p>
       <div className="facts">{listing.beds ? <span>{listing.beds} {listing.beds === 1 ? 'Bedroom' : 'Bedrooms'}</span> : null}{listing.baths ? <span>{listing.baths} {listing.baths === 1 ? 'Bathroom' : 'Bathrooms'}</span> : null}{listing.size ? <span>{listing.size} m²</span> : null}<span>{PERIODS[listing.period]?.long === 'sale price' ? 'For sale' : `Paid ${PERIODS[listing.period]?.long || ''}`}</span></div>
       <div className="location-block">
-        <div><h2>Location</h2><p>{listing.neighbourhood}, {listing.city}. The pin shows the neighbourhood centre, not the exact house.</p></div>
+        <div><h2>Location</h2><p>{listing.exact ? <>{listing.neighbourhood}, {listing.city}. The pin marks the house itself, and you can get directions from where you are.</> : <>{listing.neighbourhood}, {listing.city}. The map shows the neighbourhood; the house finder will guide you to the door.</>}</p></div>
         <button type="button" className="secondary" aria-expanded={showMap} onClick={() => setShowMap(!showMap)}>{showMap ? 'Hide map' : 'See location'}</button>
       </div>
-      {showMap ? <SearchMap compact city={listing.city} query={listing.neighbourhood} listings={[listing]} /> : null}
+      {showMap ? (listing.exact
+        ? <Suspense fallback={<p className="muted" role="status">Loading the map…</p>}><ExactMap lat={listing.lat} lng={listing.lng} title={listing.title} /></Suspense>
+        : <SearchMap compact city={listing.city} query={listing.neighbourhood} listings={[listing]} />) : null}
     </div><aside>
       <p className="kicker">PRICE</p>
       <h2 className="detail-price">{formatFcfa(listing.price)}</h2>
@@ -479,7 +482,7 @@ function Detail({ listing, loaded, all, back, member, score, onScore, go, naviga
 
 function Agents({ navigate }) { return <section className="shell section"><p className="kicker">HOUSE FINDERS</p><h1 className="page-title">Findam in each city</h1><p className="lead">Viewings are arranged from a listing after you open the contact. These desks are coverage areas, not named staff.</p><div className="agent-grid">{desks.map((desk) => <article className="agent" key={desk.city}><div className="avatar">{desk.initials}</div><h3>Findam {desk.city}</h3><p>{desk.text}</p><Link to={homesLink({ city: desk.city })} navigate={navigate} className="secondary">Browse homes in {desk.city}</Link></article>)}</div></section> }
 
-function ListProperty({ member, go, onMember }) {
+function ListProperty({ member, go, onMember, isAdmin }) {
   const [sent, setSent] = useState(false)
   const [city, setCity] = useState('')
   const [type, setType] = useState('Rent')
@@ -489,15 +492,23 @@ function ListProperty({ member, go, onMember }) {
   const [photoNote, setPhotoNote] = useState('')
   const [submitError, setSubmitError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [preparing, setPreparing] = useState(false)
+  const [exact, setExact] = useState(null)
   const allowedPhotos = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
   const priceLabel = type === 'Sale' ? 'Sale price (FCFA)' : type === 'Guest house' ? 'Price per night (FCFA)' : period === 'year' ? 'Rent per year (FCFA)' : 'Rent per month (FCFA)'
-  const addPhotos = (event) => {
+  const addPhotos = async (event) => {
     const files = Array.from(event.target.files || []).slice(0, 6)
+    setPreparing(true)
     const accepted = []
     const rejected = []
-    files.forEach((file) => { if (!allowedPhotos.has(file.type) || file.size > 5 * 1024 * 1024) rejected.push(file.name); else accepted.push(file) })
+    for (const original of files) {
+      if (!allowedPhotos.has(original.type)) { rejected.push(original.name); continue }
+      const file = await preparePhoto(original)
+      if (file.size > 5 * 1024 * 1024) rejected.push(original.name); else accepted.push(file)
+    }
     setPhotos((current) => { current.forEach((item) => URL.revokeObjectURL(item.url)); return accepted.map((file) => ({ name: file.name, url: URL.createObjectURL(file), file })) })
-    setPhotoNote(rejected.length ? 'Use JPEG, PNG, WEBP, or GIF files of 5 MB or less. Some files were skipped.' : '')
+    setPhotoNote(rejected.length ? 'Some files were skipped. Use JPEG, PNG, WEBP or GIF photos.' : '')
+    setPreparing(false)
   }
   const submit = async (event) => {
     event.preventDefault()
@@ -522,6 +533,7 @@ function ListProperty({ member, go, onMember }) {
       body.set('priceUnit', 'fcfa')
       body.set('period', type === 'Rent' ? period : '')
       photos.forEach((item) => body.append('photos', item.file))
+      if (isAdmin && exact) { body.set('exactLat', String(exact.lat)); body.set('exactLng', String(exact.lng)) }
       body.set('sessionToken', token)
       const response = await fetch('/api/listings', { method: 'POST', credentials: 'include', headers: { authorization: `Bearer ${token}` }, body })
       const payload = await response.json().catch(() => ({}))
@@ -536,7 +548,7 @@ function ListProperty({ member, go, onMember }) {
   }
   if (!member) return <section className="shell section"><div className="form-wrap"><p className="kicker">LANDLORD PORTAL</p><h1 className="page-title">List your property</h1><p className="lead">Create a free account or sign in before sending a property. An admin reviews it, and it stays off the public site until it is accepted.</p><button className="primary" onClick={() => go('account')}>Create an account or sign in</button></div></section>
   return <section className="shell section"><div className="form-wrap">
-    {sent ? <Modal title="Sent for review" onClose={() => setSent(false)} actions={<><button className="primary" autoFocus onClick={() => go('account')}>Go to my listings</button><button className="secondary" onClick={() => { setSent(false); setPrice(null); setPhotos([]) }}>List another</button></>}><p>Thank you. An admin will check your property. It appears publicly once it is accepted, and you can mark it as taken from your account when it is rented or sold.</p></Modal> : null}
+    {sent ? <Modal title="Sent for review" onClose={() => setSent(false)} actions={<><button className="primary" autoFocus onClick={() => go(isAdmin ? 'admin' : 'account')}>{isAdmin ? 'Review it now' : 'Go to my listings'}</button><button className="secondary" onClick={() => { setSent(false); setPrice(null); setPhotos([]); setExact(null) }}>List another</button></>}><p>Thank you. An admin will check your property. It appears publicly once it is accepted, and you can mark it as taken from your account when it is rented or sold.</p></Modal> : null}
     <p className="kicker">LANDLORD PORTAL</p><h1 className="page-title">List your property</h1><p className="lead">Submit your details and photos. An admin reviews the property before it appears publicly.</p>
     <form className="property-form" onSubmit={submit}>
       <label className="span-2">Property title<input name="title" required maxLength="120" placeholder="e.g. 2 Bedroom Apartment" /></label>
@@ -555,11 +567,16 @@ function ListProperty({ member, go, onMember }) {
       </div>
       <label className="span-2">Description (optional)<textarea name="description" maxLength="600" placeholder="Water, light, parking, distance to the main road, who it suits…" /></label>
       <label className="span-2">Phone number<input name="phone" required type="tel" inputMode="tel" placeholder="+237 6XX XXX XXX" /><small>Only shown to members who open the contact.</small></label>
-      <label className="photo-upload">Property photos<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={addPhotos} /><span>Upload up to 6 JPEG, PNG, WEBP, or GIF photos</span></label>
+      <label className="photo-upload">Property photos<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={addPhotos} /><span>{preparing ? 'Preparing your photos…' : 'Upload up to 6 photos. They are shown whole, exactly as you took them, upright or sideways.'}</span></label>
       {photoNote && <p className="form-message warn span-2">{photoNote}</p>}
-      {photos.length > 0 && <div className="photo-previews">{photos.map((item) => <img src={item.url} alt={item.name} key={item.url} />)}</div>}
+      {photos.length > 0 && <div className="photo-previews">{photos.map((item) => <span className="preview" key={item.url}><img src={item.url} alt={item.name} /></span>)}</div>}
+      {isAdmin ? <div className="admin-pin span-2">
+        <h2>Exact location <span>Admin only</span></h2>
+        <p>Pin the house so visitors see exactly where it is. Visitors only see a pin on the map.</p>
+        <Suspense fallback={<p className="muted">Loading the map…</p>}><LocationPicker value={exact} onChange={setExact} city={city} /></Suspense>
+      </div> : null}
       {submitError && <p className="form-message warn span-2" role="alert">{submitError}</p>}
-      <button className="primary span-2" disabled={saving}>{saving ? 'Saving…' : 'Submit for review'}</button>
+      <button className="primary span-2" disabled={saving || preparing}>{saving ? 'Saving…' : 'Submit for review'}</button>
     </form>
   </div></section>
 }

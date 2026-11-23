@@ -16,6 +16,7 @@
     "@neondatabase/neon-js": "^0.9.0-beta",
     "@neondatabase/serverless": "^1.2.0",
     "@vitejs/plugin-react": "latest",
+    "leaflet": "^1.9.4",
     "react": "latest",
     "react-dom": "latest",
     "vite": "latest"

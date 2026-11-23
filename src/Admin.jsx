@@ -1,6 +1,45 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { authHeadersFor } from './Refer.jsx'
 import { priceLine } from './price.js'
+
+const LocationPicker = lazy(() => import('./LocationPicker.jsx'))
+
+// Lets the admin pin a listing's exact house. Visitors only ever see the pin.
+function PinEditor({ item, member, onSaved, onError }) {
+  const [open, setOpen] = useState(false)
+  const [point, setPoint] = useState(item.exact ? { lat: item.lat, lng: item.lng } : null)
+  const [saving, setSaving] = useState(false)
+  const save = async (clear) => {
+    setSaving(true)
+    onError('')
+    try {
+      const response = await fetch(`/api/admin/listings/${encodeURIComponent(item.id)}/location`, {
+        method: 'POST',
+        headers: authHeadersFor(member),
+        body: JSON.stringify(clear ? { clear: true } : point),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'The location could not be saved.')
+      setOpen(false)
+      await onSaved(clear ? `Exact pin removed from "${item.title}".` : `Exact location saved for "${item.title}".`)
+    } catch (saveError) {
+      onError(saveError.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+  return <div className="pin-editor">
+    <span className={`status-pill ${item.exact ? 'live' : 'pending'}`}>{item.exact ? 'Exact pin set' : 'Neighbourhood only'}</span>
+    <button type="button" className="text-button" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Close map' : item.exact ? 'Move pin' : 'Set exact location'}</button>
+    {open ? <div className="pin-panel">
+      <Suspense fallback={<p className="muted">Loading the map…</p>}><LocationPicker value={point} onChange={setPoint} city={item.city} /></Suspense>
+      <div className="pin-actions">
+        <button type="button" className="primary" disabled={!point || saving} onClick={() => save(false)}>{saving ? 'Saving…' : 'Save location'}</button>
+        {item.exact ? <button type="button" className="secondary" disabled={saving} onClick={() => save(true)}>Use neighbourhood only</button> : null}
+      </div>
+    </div> : null}
+  </div>
+}
 
 export default function Admin({ member, authReady, access, onPublished }) {
   const [referrals, setReferrals] = useState([])
@@ -142,6 +181,8 @@ export default function Admin({ member, authReady, access, onPublished }) {
               <p>{item.phone}</p>
               <small>Submitted by {item.submittedEmail || 'unknown account'}</small>
               {item.description ? <p>{item.description}</p> : null}
+              {item.photos?.length ? <div className="admin-photos">{item.photos.map((src) => <a key={src} href={src} target="_blank" rel="noreferrer"><img src={src} alt="" loading="lazy" /></a>)}</div> : null}
+              <PinEditor item={item} member={member} onSaved={async (text) => { setMessage(text); await load(); await onPublished?.() }} onError={setError} />
             </div>
             <div className="admin-actions">
               <button className="primary" type="button" disabled={busy === item.id} onClick={() => review('listing', item.id, 'accepted')}>Accept</button>
@@ -170,6 +211,7 @@ export default function Admin({ member, authReady, access, onPublished }) {
               <b>{item.title}{item.sample ? ' (sample)' : ''}</b>
               <p>{item.neighbourhood}, {item.city} · {priceLine(item)}</p>
               <span className={`status-pill ${item.available === false ? 'taken' : 'live'}`}>{item.available === false ? 'Taken' : 'Available'}</span>
+              <PinEditor item={item} member={member} onSaved={async (text) => { setMessage(text); await load(); await onPublished?.() }} onError={setError} />
             </div>
             <div className="admin-actions">
               <button className={item.available === false ? 'primary' : 'secondary'} type="button" disabled={busy === String(item.id)} onClick={() => setAvailable(item)}>{busy === String(item.id) ? 'Saving…' : item.available === false ? 'Mark available' : 'Mark as taken'}</button>

@@ -1,11 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
+import { FullPhoto } from './Gallery.jsx'
 
-// Listing photo that falls back to the house icon if the image cannot load.
+// Listing photo shown whole (never cropped), with the house icon if the image cannot load.
 export function Photo({ src, alt = '' }) {
-  const [failed, setFailed] = useState(false)
-  useEffect(() => { setFailed(false) }, [src])
-  if (!src || failed) return <span className="property-icon" aria-hidden="true">⌂</span>
-  return <img className="listing-photo" src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} />
+  return <FullPhoto src={src} alt={alt} />
 }
 import { groupDigits, priceLine, PERIODS, formatFcfa, toAmount } from './price.js'
 import { isAvailable } from './filters.js'

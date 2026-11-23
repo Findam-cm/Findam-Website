@@ -79,6 +79,35 @@ function cleanFilters(input) {
   return f
 }
 
+// Exact house pins are set by the admin only. Accept points inside Cameroon's bounding box.
+function readPoint(lat, lng) {
+  const y = Number(lat)
+  const x = Number(lng)
+  if (!Number.isFinite(y) || !Number.isFinite(x)) return null
+  if (y < 1.6 || y > 13.2 || x < 8.3 || x > 16.3) return null
+  return { lat: Math.round(y * 1e6) / 1e6, lng: Math.round(x * 1e6) / 1e6 }
+}
+
+async function setExactLocation(bucket, listingId, point) {
+  return withCatalog(async () => {
+    const catalog = await readCatalog(bucket)
+    const listing = findListing(catalog, listingId)
+    if (!listing) return { error: 'That listing was not found.', status: 404 }
+    if (point) {
+      listing.lat = point.lat
+      listing.lng = point.lng
+      listing.exact = true
+    } else {
+      const center = catalog.cityCenters[listing.city]
+      listing.lat = center?.lat
+      listing.lng = center?.lng
+      listing.exact = false
+    }
+    await writeCatalog(bucket, catalog)
+    return { ok: true, id: String(listing.id), exact: listing.exact, lat: listing.lat, lng: listing.lng }
+  })
+}
+
 function findListing(catalog, id) {
   const target = String(id)
   return catalog.listings.find((item) => String(item.id) === target)
@@ -170,6 +199,7 @@ async function createListing(request, bucket, user, env, formData) {
   }
 
   const center = catalog.cityCenters[city]
+  const exactPoint = isAdmin(user, env) ? readPoint(form.get('exactLat'), form.get('exactLng')) : null
   await withCatalog(async () => {
     const latest = await readCatalog(bucket)
     latest.submissions.push({
@@ -178,8 +208,9 @@ async function createListing(request, bucket, user, env, formData) {
       type,
       city,
       neighbourhood,
-      lat: center?.lat,
-      lng: center?.lng,
+      lat: exactPoint ? exactPoint.lat : center?.lat,
+      lng: exactPoint ? exactPoint.lng : center?.lng,
+      exact: Boolean(exactPoint),
       price,
       period,
       beds,
@@ -400,6 +431,19 @@ export default {
         .filter((item) => item.status === 'pending')
         .map(({ phone, submittedBy, ...item }) => ({ ...item, phone, submittedBy }))
       return fail({ listings })
+    }
+
+    const locationMatch = url.pathname.match(/^\/api\/admin\/listings\/([^/]+)\/location$/)
+    if (locationMatch && request.method === 'POST') {
+      const user = await requireUser(request, env)
+      if (!user) return fail({ error: 'Sign in to update a listing.' }, 401)
+      if (!isAdmin(user, env)) return fail({ error: 'Only an admin can set the exact location.' }, 403)
+      const body = await request.json().catch(() => ({}))
+      const point = body.clear ? null : readPoint(body.lat, body.lng)
+      if (!body.clear && !point) return fail({ error: 'Choose a point inside Cameroon on the map.' }, 400)
+      const saved = await setExactLocation(env.LISTINGS, decodeURIComponent(locationMatch[1]), point)
+      if (saved.error) return fail({ error: saved.error }, saved.status)
+      return fail(saved)
     }
 
     const listingReview = url.pathname.match(/^\/api\/admin\/listings\/([^/]+)$/)

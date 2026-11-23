@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /account
+Disallow: /saved
+Disallow: /notifications
+
+Sitemap: https://usefindam.com/sitemap.xml

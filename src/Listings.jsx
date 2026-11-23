@@ -16,7 +16,7 @@ export function Filters({ filters, update, onClear }) {
       <label className="search-field">
         <span className="visually-hidden">Search location or property</span>
         <span className="search-icon" aria-hidden="true">⌕</span>
-        <input type="search" value={filters.query} onChange={(event) => update({ query: event.target.value })} placeholder="Search area, e.g. Molyko" enterKeyHint="search" />
+        <input type="search" value={filters.query} onChange={(event) => update({ query: event.target.value })} placeholder="Area, e.g. Molyko" enterKeyHint="search" />
       </label>
       <button type="button" className="filter-toggle" aria-expanded={open} aria-controls="filter-grid" onClick={() => setOpen(!open)}>
         Filters{count ? <span className="count">{count}</span> : null}

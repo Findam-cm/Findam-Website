@@ -8,6 +8,7 @@ const MIN_PRICE = 500
 const MAX_PRICE = 10_000_000_000
 const MAX_PHOTOS = 6
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024
+const MAX_THUMB_BYTES = 600 * 1024
 const SAMPLE_IDS = new Set(['1', '2', '3', '4', '5', '6'])
 const PHOTO_MAGIC = {
   'image/jpeg': [0xff, 0xd8, 0xff],
@@ -27,10 +28,8 @@ function corsHeaders(request, env) {
 }
 
 function json(body, status, request, env) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders(request, env), 'content-type': 'application/json; charset=utf-8' },
-  })
+  const headers = new Headers({ ...corsHeaders(request, env), 'content-type': 'application/json; charset=utf-8' })
+  return new Response(JSON.stringify(body), { status, headers: securityHeaders(headers, '/api') })
 }
 
 function isPublicListing(listing) {
@@ -185,17 +184,32 @@ async function createListing(request, bucket, user, env, formData) {
     if (!photoBytesMatch(typeName, bytes)) {
       return json({ error: 'Each photo must be a JPEG, PNG, WEBP, or GIF of 5 MB or less.' }, 400, request, env)
     }
-    prepared.push({ type: typeName, bytes })
+    // Optional small copy made by the browser for listing cards (same picture, fewer pixels).
+    const thumbFile = form.get(`thumb_${prepared.length}`)
+    let thumb = null
+    if (thumbFile && typeof thumbFile.arrayBuffer === 'function' && thumbFile.size && thumbFile.size <= MAX_THUMB_BYTES) {
+      const thumbType = String(thumbFile.type || '').toLowerCase()
+      const thumbBytes = new Uint8Array(await thumbFile.arrayBuffer())
+      if (photoBytesMatch(thumbType, thumbBytes)) thumb = { type: thumbType, bytes: thumbBytes }
+    }
+    prepared.push({ type: typeName, bytes, thumb })
   }
 
   const id = crypto.randomUUID()
   const photos = []
+  const thumbs = []
   for (let index = 0; index < prepared.length; index += 1) {
     const file = prepared[index]
     await bucket.put(`photos/${id}/${index}`, file.bytes, {
       httpMetadata: { contentType: file.type },
     })
     photos.push(`/api/photos/${id}/${index}`)
+    if (file.thumb) {
+      await bucket.put(`photos/${id}/${index}-t`, file.thumb.bytes, { httpMetadata: { contentType: file.thumb.type } })
+      thumbs.push(`/api/photos/${id}/${index}-t`)
+    } else {
+      thumbs.push(`/api/photos/${id}/${index}`)
+    }
   }
 
   const center = catalog.cityCenters[city]
@@ -221,6 +235,7 @@ async function createListing(request, bucket, user, env, formData) {
       status: 'pending',
       available: true,
       photos,
+      thumbs,
       phone,
       submittedBy: user.id,
       submittedEmail: user.email,
@@ -233,7 +248,7 @@ async function createListing(request, bucket, user, env, formData) {
 }
 
 async function servePhoto(url, bucket, request, env) {
-  const match = url.pathname.match(/^\/api\/photos\/([0-9a-f-]{36})\/(\d+)$/i)
+  const match = url.pathname.match(/^\/api\/photos\/([0-9a-f-]{36})\/(\d+(?:-t)?)$/i)
   if (!match) return json({ error: 'Photo not found.' }, 404, request, env)
   const catalog = await readCatalog(bucket)
   const listing = [...catalog.listings, ...catalog.submissions].find((item) => String(item.id) === match[1])
@@ -250,14 +265,12 @@ async function servePhoto(url, bucket, request, env) {
   if (!PHOTO_MAGIC[type] && type !== 'image/webp') {
     return json({ error: 'Photo not found.' }, 404, request, env)
   }
-  return new Response(object.body, {
-    headers: {
-      ...corsHeaders(request, env),
-      'content-type': type,
-      'cache-control': listing && isPublicListing(listing) ? 'public, max-age=86400' : 'private, no-store',
-      'x-content-type-options': 'nosniff',
-    },
+  const headers = new Headers({
+    ...corsHeaders(request, env),
+    'content-type': type,
+    'cache-control': listing && isPublicListing(listing) ? 'public, max-age=604800' : 'private, no-store',
   })
+  return new Response(object.body, { headers: securityHeaders(headers, '/api/photos') })
 }
 
 async function reviewListing(bucket, listingId, decision) {
@@ -312,12 +325,118 @@ function alertMatches(catalog, alert) {
     .map(({ listing, added }) => ({ ...publicListing(listing), fresh: added > seen }))
 }
 
+const SITE = 'https://usefindam.com'
+const PAGE_TITLES = {
+  '/': ['FindamCameroon | Verified homes in Bamenda, Buea and Yaounde', 'Find verified homes to rent or buy in Bamenda, Buea and Yaounde. Every listing is checked by an admin before it goes public.'],
+  '/homes': ['Homes for rent and sale | Findam', 'Search verified homes in Bamenda, Buea and Yaounde by budget, bedrooms and neighbourhood.'],
+  '/cities': ['Findam house finders | Findam', 'Findam house finders cover Bamenda, Buea and Yaounde.'],
+  '/how-it-works': ['How Findam works | Findam', 'How Findam checks every listing from visit to move-in.'],
+  '/refer': ['Refer and earn credits | Findam', 'Refer a vacant home and its landlord to earn Findam credits.'],
+  '/list': ['List a property | Findam', 'List your property on Findam and reach serious tenants and buyers.'],
+  '/saved': ['Saved homes | Findam', 'Your saved Findam homes.'],
+  '/account': ['Your account | Findam', 'Create a free Findam account or sign in.'],
+  '/notifications': ['Notifications | Findam', 'Alerts for new homes that match your search.'],
+  '/admin': ['Admin | Findam', 'Findam administration.'],
+}
+
+const CSP = "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://tile.openstreetmap.org https://server.arcgisonline.com; connect-src 'self' https: wss:; frame-src https://www.google.com https://maps.google.com; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+
+function securityHeaders(headers, pathname) {
+  headers.set('Content-Security-Policy', CSP)
+  headers.set('Strict-Transport-Security', 'max-age=31536000')
+  headers.set('X-Frame-Options', 'DENY')
+  headers.set('X-Content-Type-Options', 'nosniff')
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), payment=(), usb=(), geolocation=(self)')
+  if (/^\/assets\//.test(pathname)) headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+  return headers
+}
+
+function withHeaders(response, pathname) {
+  const copy = new Response(response.body, response)
+  securityHeaders(copy.headers, pathname)
+  return copy
+}
+
+const escapeAttr = (value) => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+
+// Serves the single-page app with the right status code and link-preview tags for each address.
+async function servePage(request, env, url) {
+  const path = url.pathname.replace(/\/+$/, '') || '/'
+  if (path === '/sitemap.xml') return sitemap(env)
+  if (/\.[a-z0-9]{2,12}$/i.test(path) || path.startsWith('/assets/')) {
+    return withHeaders(await env.ASSETS.fetch(request), url.pathname)
+  }
+  let status = 200
+  let [title, description] = PAGE_TITLES[path] || []
+  let image = `${SITE}/og-image.png`
+  const detail = path.match(/^\/homes\/([^/]+)$/)
+  if (detail) {
+    const catalog = await readCatalog(env.LISTINGS)
+    const listing = [...catalog.listings, ...catalog.submissions].find((item) => String(item.id) === decodeURIComponent(detail[1]))
+    if (listing && isPublicListing(listing)) {
+      const n = new Intl.NumberFormat('en-US').format(listing.price)
+      const unit = listing.period === 'sale' ? '' : listing.period === 'year' ? ' per year' : listing.period === 'night' ? ' per night' : ' per month'
+      title = `${listing.title} in ${listing.neighbourhood}, ${listing.city} | Findam`
+      description = `${n} FCFA${unit}. ${listing.beds ? `${listing.beds} bedroom${listing.beds === 1 ? '' : 's'}. ` : ''}${listing.available === false ? 'This home has been taken. ' : ''}${String(listing.description || '').slice(0, 140)}`
+      const pic = listing.thumbs?.[0] || listing.photos?.[0]
+      if (pic) image = `${SITE}${pic}`
+    } else {
+      status = 404
+      title = 'Home not found | Findam'
+      description = 'This home is no longer listed on Findam.'
+    }
+  } else if (!PAGE_TITLES[path]) {
+    status = 404
+    title = 'Page not found | Findam'
+    description = 'This page does not exist on Findam.'
+  }
+  // Fetch the page template without the browser's "has it changed?" headers; otherwise a returning
+  // visitor gets an empty 304 body, which would render a blank page after the rewrite below.
+  const shell = await env.ASSETS.fetch(new Request(new URL('/', url)))
+  if (!shell.ok) return withHeaders(shell, url.pathname)
+  const canonical = `${SITE}${path === '/' ? '/' : path}${path === '/homes' ? url.search : ''}`
+  const rewritten = new HTMLRewriter()
+    .on('title', { element(el) { el.setInnerContent(title) } })
+    .on('meta[name="description"]', { element(el) { el.setAttribute('content', description) } })
+    .on('meta[property="og:title"]', { element(el) { el.setAttribute('content', title.replace(/ \| Findam$/, '')) } })
+    .on('meta[property="og:description"]', { element(el) { el.setAttribute('content', description) } })
+    .on('meta[property="og:image"]', { element(el) { el.setAttribute('content', image) } })
+    .on('meta[property="og:url"]', { element(el) { el.setAttribute('content', canonical) } })
+    .on('link[rel="canonical"]', { element(el) { el.setAttribute('href', canonical) } })
+    .on('head', { element(el) { if (status === 404 || path === '/admin' || path === '/account') el.append('<meta name="robots" content="noindex">', { html: true }) } })
+    .transform(shell)
+  const response = new Response(rewritten.body, { status, headers: rewritten.headers })
+  response.headers.set('Cache-Control', 'public, max-age=0, must-revalidate')
+  response.headers.delete('Content-Length')
+  response.headers.delete('ETag')
+  return withHeaders(response, url.pathname)
+}
+
+async function sitemap(env) {
+  const catalog = await readCatalog(env.LISTINGS)
+  const pages = ['/', '/homes', '/cities', '/how-it-works', '/list', '/refer', ...catalog.cities.map((city) => `/homes?city=${city.toLowerCase()}`)]
+  const homes = [...catalog.listings, ...catalog.submissions].filter((item) => isPublicListing(item) && item.available !== false)
+  const urls = [
+    ...pages.map((page) => `<url><loc>${escapeAttr(SITE + page)}</loc></url>`),
+    ...homes.map((item) => `<url><loc>${SITE}/homes/${encodeURIComponent(item.id)}</loc>${item.publishedAt || item.createdAt ? `<lastmod>${String(item.publishedAt || item.createdAt).slice(0, 10)}</lastmod>` : ''}</url>`),
+  ]
+  return new Response(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`, {
+    headers: securityHeaders(new Headers({ 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=3600' }), '/sitemap.xml'),
+  })
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
+    // One public address: https://usefindam.com (no http, no www).
+    // Local "wrangler dev" reports every request as http://usefindam.com, so it passes --var NO_REDIRECT:1.
+    if (!env.NO_REDIRECT && (url.hostname === 'www.usefindam.com' || (url.hostname === 'usefindam.com' && url.protocol === 'http:'))) {
+      return Response.redirect(`${SITE}${url.pathname}${url.search}`, 301)
+    }
     const fail = (body, status = 200) => json(body, status, request, env)
     if (!url.pathname.startsWith('/api')) {
-      if (env.ASSETS) return env.ASSETS.fetch(request)
+      if (env.ASSETS) return servePage(request, env, url)
       const site = String(env.SITE_URL || 'http://127.0.0.1:5173/').trim()
       return fail({ ok: true, site, message: 'This address is the Findam API. Open the site URL to use the website.' })
     }

@@ -486,3 +486,40 @@ a.text-button:hover{color:var(--orange)}
   .exact-map-tools .primary{flex-basis:100%}
   .lightbox-nav{width:44px;height:44px;margin-top:-22px;font-size:30px}
 }
+
+/* ===== QA fixes: readable orange text, larger small text, bigger tap targets, bot placement ===== */
+:root{--orange-text:#b84a08}
+.kicker,.listing-copy .price,.route-summary b,.credit-hint a,.contact-box a,.auth-switch .text-button,.city-links span,.ticks b,.stat strong,.credit-score strong,.chips button,.count-pill{color:var(--orange-text)}
+.listing-copy .price{font-size:15px}
+nav a.active,nav a:hover,.text-button:hover,a.text-button:hover,.type-tabs button.selected,.breadcrumbs a:hover,.signup-pill,.filter-toggle[aria-expanded="true"],.segmented button.selected,.auth-tabs button.selected,.reveal,.pin-editor .text-button,.role button,.workflow-grid span{color:var(--orange-text)}
+.signup-pill{border-color:var(--orange-text)}
+.secondary{border-color:var(--orange-text);color:var(--orange-text)}
+.secondary.active{background:var(--orange-text);color:#fff}
+.kicker{font-size:11px}
+.badge{padding:4px 8px;font-size:10px;letter-spacing:.4px}
+.search-bar label span,.filters label span{font-size:11px;color:#6b6b6b}
+.search-bar select,.search-bar input{font-size:14px}
+.search-bar .search-hint{font-size:12px;color:#666}
+.trust b{font-size:12px}.trust small{font-size:11px;color:#5f5f5f}
+.listing-copy p{font-size:12px;color:#666}
+.meta{font-size:11px;color:#6f6f6f}
+.role p{font-size:13px;color:#666}
+.role button{display:inline-flex;align-items:center;min-height:32px;padding:4px 0;font-size:13px}
+.type-tabs{gap:6px 18px}
+.type-tabs button{min-width:44px;min-height:36px;padding:8px 2px;font-size:14px}
+.mini-toggle button{min-height:30px;padding:4px 14px;font-size:12px}
+.steps p{font-size:12px}
+.listing-copy h3{font-size:14px}
+.empty-title{margin:0 0 8px;color:var(--ink);font-size:24px}
+.empty-actions.left{justify-content:flex-start}
+.not-found{min-height:46vh}
+/* Keep the floating helper clear of gallery and map buttons */
+.stage-expand{right:auto;left:68px}
+@media(max-width:580px){
+  .bot-widget{right:12px;bottom:12px}
+  .whatsapp{width:50px;min-width:50px;height:50px}
+  .whatsapp .floating-bot{width:30px;height:30px;margin:0}
+  .gallery,.exact-map,.picker-paste{padding-bottom:4px}
+  .listing-copy .price{font-size:16px}
+  .badge{font-size:10px}
+}

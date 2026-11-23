@@ -29,7 +29,7 @@ const PAGES = {
 }
 
 const TITLES = {
-  home: 'FindamCameroon | Verified Properties',
+  home: 'FindamCameroon | Verified homes in Bamenda, Buea and Yaounde',
   listings: 'Homes for rent and sale | Findam',
   agents: 'Findam house finders | Findam',
   saved: 'Saved homes | Findam',
@@ -39,6 +39,7 @@ const TITLES = {
   workflow: 'How Findam works | Findam',
   refer: 'Refer and earn credits | Findam',
   alerts: 'Notifications | Findam',
+  notfound: 'Page not found | Findam',
 }
 
 function pathFor(page) {
@@ -53,7 +54,7 @@ function locationState(catalog, pathname = window.location.pathname) {
     const listing = catalog.find((item) => String(item.id) === id) || null
     return { page: 'detail', listing }
   }
-  return { page: PAGES[path] || 'home', listing: null }
+  return { page: PAGES[path] || 'notfound', listing: null }
 }
 
 function Logo() {
@@ -213,8 +214,10 @@ function App() {
   useEffect(() => { setAlertState('') }, [filters])
 
   useEffect(() => {
-    document.title = page === 'detail' && selected ? `${selected.title} in ${selected.neighbourhood}, ${selected.city} | Findam` : TITLES[page] || TITLES.home
-  }, [page, selected])
+    document.title = page === 'detail'
+      ? (selected ? `${selected.title} in ${selected.neighbourhood}, ${selected.city} | Findam` : catalogLoaded ? 'Home not found | Findam' : 'Findam')
+      : TITLES[page] || TITLES.home
+  }, [page, selected, catalogLoaded])
 
   useEffect(() => {
     const onPop = () => {
@@ -332,6 +335,7 @@ function App() {
       {page === 'account' && <Account member={member} onMember={setMember} score={creditScore} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} />}
       {page === 'refer' && <Refer member={member} onScore={setCreditScore} go={go} />}
       {page === 'admin' && <Admin member={member} authReady={authReady} access={adminAccess} onPublished={refreshPublicListings} />}
+      {page === 'notfound' && <section className="shell section narrow not-found"><p className="kicker">ERROR 404</p><h1 className="page-title">This page does not exist</h1><p className="lead">The link may be old or mistyped. Try one of these instead.</p><div className="empty-actions left"><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link><Link to="/" navigate={navigate} className="secondary">Go to the home page</Link></div></section>}
       {page === 'alerts' && <Notifications member={member} data={alertsData} onSeen={markSeen} onDelete={deleteAlert} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} navigate={navigate} go={go} />}
     </main>
     <HelpBot go={go} navigate={navigate} />
@@ -418,7 +422,7 @@ function Detail({ listing, loaded, all, back, member, score, onScore, go, naviga
   const [showMap, setShowMap] = useState(false)
   useEffect(() => { setContact(null); setContactError(''); setShowMap(false) }, [listing?.id])
   if (!listing && !loaded) return <section className="shell section"><p role="status" className="muted">Loading this home…</p></section>
-  if (!listing) return <section className="shell section"><div className="empty"><h2>This home is no longer listed</h2><p>It may have been taken or removed.</p><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link></div></section>
+  if (!listing) return <section className="shell section"><div className="empty"><h1 className="empty-title">This home is no longer listed</h1><p>It may have been taken or removed.</p><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link></div></section>
   const available = isAvailable(listing)
   const badge = statusBadge(listing)
   const freeFinder = (score?.freeFinder) || (score?.score >= 5)
@@ -449,7 +453,7 @@ function Detail({ listing, loaded, all, back, member, score, onScore, go, naviga
     </ol></div>
     <button className="text-button back" onClick={back}>← Back to results</button>
     <div className="detail"><div>
-      <Gallery photos={photos} title={listing.title} hue={listing.hue} taken={!available} overlay={<>
+      <Gallery photos={photos} thumbs={listing.thumbs || []} title={listing.title} hue={listing.hue} taken={!available} overlay={<>
         <span className={`badge ${badge.tone}`}>{badge.text}</span>
         <button type="button" className={`heart ${savedIds.includes(listing.id) ? 'saved' : ''}`} onClick={() => onSave(listing.id)} aria-label={savedIds.includes(listing.id) ? 'Remove from saved' : 'Save property'} aria-pressed={savedIds.includes(listing.id)}>{savedIds.includes(listing.id) ? '♥' : '♡'}</button>
       </>} />
@@ -503,10 +507,10 @@ function ListProperty({ member, go, onMember, isAdmin }) {
     const rejected = []
     for (const original of files) {
       if (!allowedPhotos.has(original.type)) { rejected.push(original.name); continue }
-      const file = await preparePhoto(original)
-      if (file.size > 5 * 1024 * 1024) rejected.push(original.name); else accepted.push(file)
+      const { full, thumb } = await preparePhoto(original)
+      if (full.size > 5 * 1024 * 1024) rejected.push(original.name); else accepted.push({ file: full, thumb })
     }
-    setPhotos((current) => { current.forEach((item) => URL.revokeObjectURL(item.url)); return accepted.map((file) => ({ name: file.name, url: URL.createObjectURL(file), file })) })
+    setPhotos((current) => { current.forEach((item) => URL.revokeObjectURL(item.url)); return accepted.map((item) => ({ name: item.file.name, url: URL.createObjectURL(item.file), file: item.file, thumb: item.thumb })) })
     setPhotoNote(rejected.length ? 'Some files were skipped. Use JPEG, PNG, WEBP or GIF photos.' : '')
     setPreparing(false)
   }
@@ -532,7 +536,10 @@ function ListProperty({ member, go, onMember, isAdmin }) {
       body.set('price', String(price))
       body.set('priceUnit', 'fcfa')
       body.set('period', type === 'Rent' ? period : '')
-      photos.forEach((item) => body.append('photos', item.file))
+      photos.forEach((item, index) => {
+        body.append('photos', item.file)
+        if (item.thumb) body.append(`thumb_${index}`, item.thumb)
+      })
       if (isAdmin && exact) { body.set('exactLat', String(exact.lat)); body.set('exactLng', String(exact.lng)) }
       body.set('sessionToken', token)
       const response = await fetch('/api/listings', { method: 'POST', credentials: 'include', headers: { authorization: `Bearer ${token}` }, body })
@@ -591,7 +598,9 @@ function HelpBot({ go, navigate }) {
   const [messages, setMessages] = useState([{ from: 'bot', text: 'Hi! I am Findam Bot. Ask about homes, prices, alerts, verification or listing a property.' }])
   const botReply = (text) => {
     const value = text.toLowerCase()
-    if (value.includes('price') || value.includes('cost') || value.includes('budget') || value.includes('fcfa')) return 'Prices are full amounts in FCFA. Rent shows per month or per year, guest houses per night, and sales show the full price. In search, type your budget in full, for example 150000 for 150,000 FCFA.'
+    const has = (...words) => words.some((word) => value.includes(word))
+    if (/^(hi|hello|hey|good (morning|afternoon|evening))\b/.test(value.trim())) return 'Hello! Are you looking for a home, or do you want to list one? You can also ask about prices, alerts or credits.'
+    if (has('how much', 'price', 'cost', 'budget', 'fcfa', 'cheap', 'afford', 'expensive', 'rent is', 'per month', 'per year')) return 'Prices are full amounts in FCFA. Rent shows per month or per year, guest houses per night, and sales show the full price. In search, type your budget in full, for example 150000 for 150,000 FCFA.'
     if (value.includes('notif') || value.includes('alert')) return 'Search for a home, then press "Notify me of new matches". New matching homes appear on the bell at the top of the page, and as a pop-up if you allow notifications.'
     if (value.includes('taken') || value.includes('available')) return 'Homes that are rented or sold are marked Taken and hidden from search, so you only see homes you can still get.'
     if (value.includes('verif') || value.includes('safe')) return 'A new listing stays off the public site until an admin accepts it. Homes marked Sample are demo data, not inspected properties.'
@@ -600,6 +609,7 @@ function HelpBot({ go, navigate }) {
     if (value.includes('city') || value.includes('location') || value.includes('map')) return 'Findam covers Bamenda, Buea and Yaounde. Filter by city or type a neighbourhood, then press "See location on map".'
     if (value.includes('refer') || value.includes('credit') || value.includes('score')) return 'Refer a property, and its landlord if you know them. Accepted referrals add 2 credits for the property and 3 for the landlord. At 5 credits, property contacts open free.'
     if (value.includes('account') || value.includes('sign')) return 'Open Sign up at the top of the page to create a free account in under a minute.'
+    if (has('room', 'house', 'apartment', 'studio', 'flat', 'home', 'rent', 'buy', 'hostel', 'bedroom')) return 'Open Property listings and filter by city, budget and bedrooms. Press "See location on map" to see where a home is, and "Notify me of new matches" to be told when a new one is published.'
     if (value.includes('agent') || value.includes('contact')) return 'Open a listing and use your credits to request the contact. Findam does not publish a phone number on this site yet.'
     return 'I can help with finding a home, prices, alerts, listing a property, verification, cities and referrals. Could you tell me a little more?'
   }

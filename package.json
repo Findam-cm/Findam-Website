@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "api": "wrangler dev --port 8787 --env-file .env.api",
+    "api": "wrangler dev --port 8787 --env-file .env.api --var NO_REDIRECT:1",
     "build": "vite build",
     "preview": "vite preview"
   },

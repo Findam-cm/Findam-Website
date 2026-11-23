@@ -60,7 +60,7 @@ export function ListingCard({ listing, onOpen, saved, onSave }) {
     }}>
       <div className="listing-image" style={{ '--hue': listing.hue }}>
         <span className={`badge ${badge.tone}`}>{badge.text}</span>
-        <Photo src={listing.photos?.[0]} />
+        <Photo src={listing.thumbs?.[0] || listing.photos?.[0]} />
       </div>
       <div className="listing-copy">
         <h3>{listing.title}</h3>

@@ -55,7 +55,7 @@ function Lightbox({ photos, index, setIndex, title, onClose }) {
   </div>
 }
 
-export default function Gallery({ photos = [], title, hue, taken, overlay }) {
+export default function Gallery({ photos = [], thumbs = [], title, hue, taken, overlay }) {
   const [index, setIndex] = useState(0)
   const [open, setOpen] = useState(false)
   useEffect(() => { setIndex(0); setOpen(false) }, [photos.join('|')])
@@ -79,28 +79,37 @@ export default function Gallery({ photos = [], title, hue, taken, overlay }) {
       <span className="stage-count" aria-hidden="true">{index + 1} / {count}</span>
       <button type="button" className="stage-expand" onClick={() => setOpen(true)}>View full size</button>
     </div>
-    {count > 1 ? <div className="thumbs" role="group" aria-label="Choose a photo">{photos.map((src, i) => <button type="button" key={src} className={i === index ? 'selected' : ''} onClick={() => setIndex(i)} aria-label={`Show photo ${i + 1}`} aria-pressed={i === index}><img src={src} alt="" loading="lazy" /></button>)}</div> : null}
+    {count > 1 ? <div className="thumbs" role="group" aria-label="Choose a photo">{photos.map((src, i) => <button type="button" key={src} className={i === index ? 'selected' : ''} onClick={() => setIndex(i)} aria-label={`Show photo ${i + 1}`} aria-pressed={i === index}><img src={thumbs[i] || src} alt="" loading="lazy" /></button>)}</div> : null}
     {open ? <Lightbox photos={photos} index={index} setIndex={setIndex} title={title} onClose={() => setOpen(false)} /> : null}
   </div>
 }
 
-// Phone photos can be larger than the 5 MB upload limit. Shrink only those, keeping the whole
-// picture and its original proportions and orientation.
-export async function preparePhoto(file, limit = 4.8 * 1024 * 1024) {
-  if (file.size <= limit || !/^image\/(jpeg|png|webp)$/.test(file.type)) return file
+async function encode(bitmap, longest, quality, name) {
+  const scale = Math.min(1, longest / Math.max(bitmap.width, bitmap.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(bitmap.width * scale)
+  canvas.height = Math.round(bitmap.height * scale)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+  return blob ? new File([blob], name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : null
+}
+
+// Makes a web-sized copy (at most 2000 px on the long side) and a small card copy (640 px).
+// Both keep the whole picture, its proportions and its upright orientation, so nothing is cropped,
+// and visitors on mobile data download a few hundred kilobytes instead of several megabytes.
+export async function preparePhoto(file) {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return { full: file, thumb: null }
   try {
     const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
-    const longest = Math.max(bitmap.width, bitmap.height)
-    let scale = Math.min(1, 3200 / longest)
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.round(bitmap.width * scale)
-      canvas.height = Math.round(bitmap.height * scale)
-      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9))
-      if (blob && blob.size <= limit) return new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' })
-      scale *= 0.8
-    }
-  } catch {}
-  return file
+    // Always re-save: this also removes hidden camera data such as the GPS position where the photo was taken.
+    const full = await encode(bitmap, 2000, 0.86, file.name)
+    const thumb = await encode(bitmap, 640, 0.8, `${file.name}-small`)
+    bitmap.close?.()
+    return { full: full || file, thumb }
+  } catch {
+    return { full: file, thumb: null }
+  }
 }

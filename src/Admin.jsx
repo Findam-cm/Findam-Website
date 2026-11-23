@@ -137,32 +137,23 @@ export default function Admin({ member, authReady, access, onPublished }) {
   return <section className="shell section">
     <p className="kicker">ADMINISTRATION</p>
     <h1 className="page-title">Admin dashboard</h1>
-    <p className="lead">Review property submissions and referrals. Only the server-authorized root admin account can use these controls.</p>
-    {!authReady || access === 'checking' ? <p role="status">Checking your admin access…</p> : !member ? (
+    <p className="lead">This area is for the Findam team.</p>
+    {!authReady || access === 'checking' ? <p role="status">Checking your access…</p> : !member ? (
       <div className="admin-setup">
-        <h2>Sign in with your admin account</h2>
-        <p>Configure <code>ROOT_ADMIN_EMAIL</code> on the backend, create an account using that exact email on the Account page, and sign in.</p>
-        <ol>
-          <li>For local development, set <code>ROOT_ADMIN_EMAIL</code> in <code>.env</code>, then run <code>node scripts/sync-neon-env.mjs</code> and restart the API.</li>
-          <li>For the live site, set the <code>ROOT_ADMIN_EMAIL</code> secret in Cloudflare Workers.</li>
-          <li>Create the account at <code>/account</code> with that email; set its password through Neon Auth, not an environment file.</li>
-        </ol>
-        <button className="primary" onClick={() => { window.location.href = '/account' }}>Go to Account</button>
+        <h2>Sign in to continue</h2>
+        <p>Sign in with the Findam administrator account to review listings and referrals.</p>
+        <button className="primary" onClick={() => { window.location.href = '/account?mode=signin' }}>Sign in</button>
       </div>
     ) : access === 'unavailable' ? (
       <div className="admin-setup" role="alert">
-        <h2>Admin access could not be verified</h2>
-        <p>The API could not confirm your role. Check that the backend is running and its database and Neon Auth configuration are available, then reload this page.</p>
+        <h2>We could not check your access</h2>
+        <p>Please reload the page in a moment.</p>
       </div>
     ) : access !== 'admin' ? (
       <div className="admin-setup" role="status">
-        <h2>This account is not an administrator</h2>
-        <p>Signed in as {member.email}. Root-admin access is granted only when this email exactly matches the server-side <code>ROOT_ADMIN_EMAIL</code> setting. Do not send or store your password in environment files.</p>
-        <ol>
-          <li>Set <code>ROOT_ADMIN_EMAIL</code> to this account’s email in the Worker environment.</li>
-          <li>For local development, set it in <code>.env</code> and run <code>node scripts/sync-neon-env.mjs</code>.</li>
-          <li>For the live site, set it in Cloudflare Workers as a secret, then sign out and back in.</li>
-        </ol>
+        <h2>This page is for administrators</h2>
+        <p>You are signed in as {member.email}, which does not have administrator access.</p>
+        <button className="secondary" onClick={() => { window.location.href = '/homes' }}>Browse homes</button>
       </div>
     ) : (
       <>

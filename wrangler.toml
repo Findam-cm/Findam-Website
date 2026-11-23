@@ -16,7 +16,9 @@ zone_name = "usefindam.com"
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*"]
+# The Worker handles every request so it can redirect http/www, add security headers,
+# return real 404s and add link-preview tags for each listing.
+run_worker_first = true
 
 [[r2_buckets]]
 binding = "LISTINGS"

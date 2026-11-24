@@ -88,6 +88,7 @@ async function ensureTables(sql, databaseUrl) {
       PRIMARY KEY (user_id, listing_id)
     )
   `
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS referrer_phone text NOT NULL DEFAULT ''`
   await sql`
     CREATE TABLE IF NOT EXISTS search_alerts (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -142,69 +143,51 @@ export async function markAlertsSeen(databaseUrl, userId) {
   return { ok: true }
 }
 
-export const CREDIT_RULES = {
-  property: 2,
-  landlord: 3,
-  freeAt: 5,
-  unlockCost: 1,
-}
-
 function phoneKey(phone) {
   return String(phone || '').replace(/\D/g, '')
 }
 
-export async function creditAccount(databaseUrl, userId) {
+// A member's landlord referrals and their review status. (The old credit system has been removed.)
+export async function memberAccount(databaseUrl, userId) {
   const sql = client(databaseUrl)
   await ensureTables(sql, databaseUrl)
-  const totals = await sql`SELECT coalesce(sum(delta), 0)::int AS score FROM credit_ledger WHERE user_id = ${userId}`
   const referrals = await sql`
-    SELECT id, kind, contact_name, phone, city, neighbourhood, detail, credits, status, created_at
+    SELECT id, kind, contact_name, phone, city, neighbourhood, detail, status, created_at
     FROM referrals
     WHERE user_id = ${userId}
     ORDER BY created_at DESC
   `
-  const unlocks = await sql`SELECT listing_id FROM listing_unlocks WHERE user_id = ${userId}`
-  const score = totals[0]?.score ?? 0
-  const pendingCredits = referrals
-    .filter((row) => row.status === 'pending')
-    .reduce((sum, row) => sum + Number(row.credits || 0), 0)
-  return {
-    score,
-    pendingCredits,
-    freeFinder: score >= CREDIT_RULES.freeAt,
-    freeAt: CREDIT_RULES.freeAt,
-    rules: CREDIT_RULES,
-    referrals,
-    unlocked: unlocks.map((row) => row.listing_id),
-  }
+  return { referrals }
 }
 
+// Referral programme: members refer landlords. Findam reviews each one and rewards the member
+// when the landlord's homes are listed or let through Findam.
 export async function addReferral(databaseUrl, user, input) {
-  const kind = input.kind === 'landlord' ? 'landlord' : input.kind === 'property' ? 'property' : ''
   const contactName = String(input.contactName || '').trim().slice(0, 80)
   const phone = String(input.phone || '').trim().slice(0, 20)
   const city = String(input.city || '').trim()
   const neighbourhood = String(input.neighbourhood || '').trim().slice(0, 80)
-  const detail = String(input.detail || '').trim().slice(0, 240)
+  const detail = String(input.detail || '').trim().slice(0, 300)
+  const referrerPhone = String(input.referrerPhone || '').trim().slice(0, 20)
   const key = phoneKey(phone)
-  if (!kind || contactName.length < 2 || key.length < 8 || !input.cities?.includes(city) || neighbourhood.length < 2) {
-    return { error: 'Add the name, a reachable phone number, the city, and the neighbourhood.', status: 400 }
+  if (contactName.length < 2 || key.length < 8 || !input.cities?.includes(city) || neighbourhood.length < 2) {
+    return { error: 'Add the landlord’s name, a reachable phone number, the city and the neighbourhood.', status: 400 }
   }
-  const credits = CREDIT_RULES[kind]
+  if (phoneKey(referrerPhone).length < 8) return { error: 'Add your own phone number so we can reach you about your reward.', status: 400 }
   const sql = client(databaseUrl)
   await ensureTables(sql, databaseUrl)
   let created
   try {
     created = await sql`
-      INSERT INTO referrals (user_id, user_email, kind, contact_name, phone, phone_key, city, neighbourhood, detail, credits)
-      VALUES (${user.id}, ${user.email}, ${kind}, ${contactName}, ${phone}, ${key}, ${city}, ${neighbourhood}, ${detail}, ${credits})
-      RETURNING id, kind, contact_name, phone, city, neighbourhood, detail, credits, status, created_at
+      INSERT INTO referrals (user_id, user_email, kind, contact_name, phone, phone_key, city, neighbourhood, detail, credits, referrer_phone)
+      VALUES (${user.id}, ${user.email}, 'landlord', ${contactName}, ${phone}, ${key}, ${city}, ${neighbourhood}, ${detail}, 0, ${referrerPhone})
+      RETURNING id, kind, contact_name, phone, city, neighbourhood, detail, status, created_at
     `
   } catch (error) {
-    if (error?.code === '23505') return { error: 'That phone number has already been referred.', status: 409 }
+    if (error?.code === '23505') return { error: 'This landlord has already been referred to Findam.', status: 409 }
     throw error
   }
-  const account = await creditAccount(databaseUrl, user.id)
+  const account = await memberAccount(databaseUrl, user.id)
   return { referral: created[0], ...account }
 }
 
@@ -212,7 +195,7 @@ export async function listPendingReferrals(databaseUrl) {
   const sql = client(databaseUrl)
   await ensureTables(sql, databaseUrl)
   return sql`
-    SELECT id, kind, contact_name, phone, city, neighbourhood, detail, credits, user_email, created_at
+    SELECT id, kind, contact_name, phone, city, neighbourhood, detail, referrer_phone, user_email, created_at
     FROM referrals
     WHERE status = 'pending'
     ORDER BY created_at ASC
@@ -224,77 +207,12 @@ export async function reviewReferral(databaseUrl, referralId, decision) {
   if (decision !== 'accepted' && decision !== 'rejected') return { error: 'Choose accept or reject.', status: 400 }
   const sql = client(databaseUrl)
   await ensureTables(sql, databaseUrl)
-  const rows = await sql`SELECT id, user_id, kind, credits, status FROM referrals WHERE id = ${id}`
-  const referral = rows[0]
-  if (!referral) return { error: 'That referral was not found.', status: 404 }
-  if (referral.status !== 'pending') return { error: 'This referral has already been reviewed.', status: 409 }
-  if (decision === 'rejected') {
-    const updated = await sql`UPDATE referrals SET status = 'rejected' WHERE id = ${id} AND status = 'pending' RETURNING id`
-    if (!updated.length) return { error: 'This referral has already been reviewed.', status: 409 }
-    return { ok: true, status: 'rejected' }
+  const updated = await sql`UPDATE referrals SET status = ${decision} WHERE id = ${id} AND status = 'pending' RETURNING id`
+  if (!updated.length) {
+    const rows = await sql`SELECT id FROM referrals WHERE id = ${id}`
+    return rows.length ? { error: 'This referral has already been reviewed.', status: 409 } : { error: 'That referral was not found.', status: 404 }
   }
-  const updated = await sql`
-    WITH accepted AS (
-      UPDATE referrals SET status = 'accepted'
-      WHERE id = ${id} AND status = 'pending'
-      RETURNING id, user_id, kind, credits
-    )
-    INSERT INTO credit_ledger (user_id, delta, reason, referral_id)
-    SELECT user_id, credits,
-      CASE WHEN kind = 'landlord' THEN 'Referred a landlord' ELSE 'Referred a property' END,
-      id
-    FROM accepted
-    RETURNING delta
-  `
-  if (!updated.length) return { error: 'This referral has already been reviewed.', status: 409 }
-  return { ok: true, status: 'accepted', credits: updated[0].delta }
-}
-
-export async function openListingContact(databaseUrl, userId, listingId) {
-  const id = String(listingId || '').trim().slice(0, 80)
-  if (!id) return { error: 'Choose a property first.', status: 400 }
-  const sql = client(databaseUrl)
-  await ensureTables(sql, databaseUrl)
-  const results = await sql.transaction([
-    sql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`,
-    sql`
-      INSERT INTO credit_ledger (user_id, delta, reason, listing_id)
-      SELECT ${userId}, ${-CREDIT_RULES.unlockCost}, ${'Opened a property contact'}, ${id}
-      WHERE NOT EXISTS (
-        SELECT 1 FROM listing_unlocks WHERE user_id = ${userId} AND listing_id = ${id}
-      )
-      AND (SELECT coalesce(sum(delta), 0)::int FROM credit_ledger WHERE user_id = ${userId}) >= ${CREDIT_RULES.unlockCost}
-      AND (SELECT coalesce(sum(delta), 0)::int FROM credit_ledger WHERE user_id = ${userId}) < ${CREDIT_RULES.freeAt}
-      RETURNING id
-    `,
-    sql`
-      INSERT INTO listing_unlocks (user_id, listing_id)
-      SELECT ${userId}, ${id}
-      WHERE EXISTS (
-        SELECT 1 FROM listing_unlocks WHERE user_id = ${userId} AND listing_id = ${id}
-      )
-      OR (SELECT coalesce(sum(delta), 0)::int FROM credit_ledger WHERE user_id = ${userId}) >= ${CREDIT_RULES.freeAt}
-      OR EXISTS (
-        SELECT 1 FROM credit_ledger
-        WHERE user_id = ${userId} AND listing_id = ${id} AND delta = ${-CREDIT_RULES.unlockCost}
-      )
-      ON CONFLICT DO NOTHING
-      RETURNING listing_id
-    `,
-    sql`
-      SELECT listing_id FROM listing_unlocks
-      WHERE user_id = ${userId} AND listing_id = ${id}
-    `,
-    sql`SELECT coalesce(sum(delta), 0)::int AS score FROM credit_ledger WHERE user_id = ${userId}`,
-  ])
-  const opened = results[3]
-  const totals = results[4]
-  const score = totals[0]?.score ?? 0
-  const freeFinder = score >= CREDIT_RULES.freeAt
-  if (!opened.length) {
-    return { error: 'Refer a property or a landlord to earn credits before opening a contact.', status: 402, score, freeFinder }
-  }
-  return { ok: true, score, freeFinder, listingId: id }
+  return { ok: true, status: decision }
 }
 
 export async function addActivity(databaseUrl, note) {

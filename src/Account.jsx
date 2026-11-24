@@ -13,8 +13,8 @@ function initialMode() {
 }
 
 const TITLES = {
-  signup: ['Create your Findam account', 'Free to join. Save homes, get alerts when new homes match your search, list a property and earn credits.'],
-  signin: ['Welcome back', 'Sign in to see your saved homes, alerts, listings and credits.'],
+  signup: ['Create your Findam account', 'Free to join. See landlord contacts, save homes, get alerts when new homes match your search, list a property and refer landlords.'],
+  signin: ['Welcome back', 'Sign in to see your saved homes, alerts, listings and referrals.'],
   forgot: ['Reset your password', 'Enter the email on your account. We will send a link to choose a new password.'],
   reset: ['Choose a new password', 'Enter a new password for your account.'],
 }
@@ -28,7 +28,7 @@ function friendlyError(error, mode) {
   return text || (mode === 'signup' ? 'Your account could not be created. Try again.' : 'Sign in failed. Try again.')
 }
 
-export default function Account({ member, onMember, score, savedCount, alertCount, go }) {
+export default function Account({ member, onMember, referralCount, savedCount, alertCount, go }) {
   const [loading, setLoading] = useState(true)
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('token') || '')
   const [mode, setMode] = useState(initialMode)
@@ -153,7 +153,7 @@ export default function Account({ member, onMember, score, savedCount, alertCoun
       <button className="secondary" onClick={signOut}>Sign out</button>
     </div>
     <div className="stat-grid">
-      <button type="button" className="stat" onClick={() => go('refer')}><strong>{score?.score ?? 0}</strong><span>Credits</span><small>{score?.freeFinder ? 'Contacts open free' : 'Refer homes to earn more'}</small></button>
+      <button type="button" className="stat" onClick={() => go('refer')}><strong>{referralCount ?? 0}</strong><span>Landlords referred</span><small>Referral programme</small></button>
       <button type="button" className="stat" onClick={() => go('saved')}><strong>{savedCount}</strong><span>Saved homes</span><small>Your shortlist</small></button>
       <button type="button" className="stat" onClick={() => go('alerts')}><strong>{alertCount}</strong><span>Home alerts</span><small>New matches are announced</small></button>
     </div>

@@ -1,5 +1,5 @@
 import { seed } from './seed.js'
-import { addAlert, addReferral, checkPostgres, creditAccount, deleteAlert, listAlerts, listPendingReferrals, markAlertsSeen, openListingContact, reviewReferral } from './db.js'
+import { addAlert, addReferral, checkPostgres, deleteAlert, listAlerts, listPendingReferrals, markAlertsSeen, memberAccount, reviewReferral } from './db.js'
 import { allowedOrigins, isAdmin, requireUser } from './session.js'
 import { EMPTY_FILTERS, describeFilters, matchesFilters } from '../src/filters.js'
 
@@ -331,7 +331,7 @@ const PAGE_TITLES = {
   '/homes': ['Homes for rent and sale | Findam', 'Search verified homes in Bamenda, Buea and Yaounde by budget, bedrooms and neighbourhood.'],
   '/cities': ['Findam house finders | Findam', 'Findam house finders cover Bamenda, Buea and Yaounde.'],
   '/how-it-works': ['How Findam works | Findam', 'How Findam checks every listing from visit to move-in.'],
-  '/refer': ['Refer and earn credits | Findam', 'Refer a vacant home and its landlord to earn Findam credits.'],
+  '/refer': ['Refer a landlord | Findam', 'Join the Findam referral programme: refer a landlord and gain when their homes are listed or let through Findam.'],
   '/list': ['List a property | Findam', 'List your property on Findam and reach serious tenants and buyers.'],
   '/saved': ['Saved homes | Findam', 'Your saved Findam homes.'],
   '/account': ['Your account | Findam', 'Create a free Findam account or sign in.'],
@@ -514,11 +514,12 @@ export default {
       return fail(changed)
     }
 
-    if (url.pathname === '/api/credits' && request.method === 'GET') {
+    // "/api/credits" is kept as an alias so pages already open in a browser keep working.
+    if ((url.pathname === '/api/account' || url.pathname === '/api/credits') && request.method === 'GET') {
       if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
       const user = await requireUser(request, env)
-      if (!user) return fail({ error: 'Sign in before checking your score.' }, 401)
-      return fail({ ...(await creditAccount(env.DATABASE_URL, user.id)), admin: isAdmin(user, env) })
+      if (!user) return fail({ error: 'Sign in to see your account.' }, 401)
+      return fail({ ...(await memberAccount(env.DATABASE_URL, user.id)), admin: isAdmin(user, env) })
     }
 
     if (url.pathname === '/api/admin/referrals' && request.method === 'GET') {
@@ -583,49 +584,21 @@ export default {
       const catalog = await readCatalog(env.LISTINGS)
       const body = await request.json().catch(() => ({}))
       const saved = await addReferral(env.DATABASE_URL, user, { ...body, cities: catalog.cities })
-      if (saved.error) return fail({ error: saved.error, score: saved.score }, saved.status)
-      // One form can also introduce the property's landlord, which is saved as its own referral.
-      const landlord = body.landlord && typeof body.landlord === 'object' ? body.landlord : null
-      if (body.kind !== 'property' || !landlord) return fail(saved, 201)
-      const landlordSaved = await addReferral(env.DATABASE_URL, user, {
-        kind: 'landlord',
-        contactName: landlord.sameAsContact ? body.contactName : landlord.contactName,
-        phone: landlord.sameAsContact ? body.phone : landlord.phone,
-        city: body.city,
-        neighbourhood: body.neighbourhood,
-        detail: `Landlord of the property referred together: ${String(body.detail || '').slice(0, 180)}`,
-        cities: catalog.cities,
-      })
-      if (landlordSaved.error) {
-        const account = await creditAccount(env.DATABASE_URL, user.id)
-        return fail({ ...account, referral: saved.referral, landlordError: landlordSaved.error }, 201)
-      }
-      return fail({ ...landlordSaved, referral: saved.referral, landlordReferral: landlordSaved.referral }, 201)
+      if (saved.error) return fail({ error: saved.error }, saved.status)
+      return fail(saved, 201)
     }
 
     const contactMatch = url.pathname.match(/^\/api\/listings\/([^/]+)\/contact$/)
+    // Any signed-in member can see a listing's contact; there is no charge.
     if (contactMatch && request.method === 'POST') {
-      if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
       const user = await requireUser(request, env)
-      if (!user) return fail({ error: 'Sign in to open a property contact.' }, 401)
+      if (!user) return fail({ error: 'Sign in to see this contact.' }, 401)
       const catalog = await readCatalog(env.LISTINGS)
       const listing = [...catalog.listings, ...catalog.submissions].find((item) => String(item.id) === decodeURIComponent(contactMatch[1]))
       if (!listing || !isPublicListing(listing)) return fail({ error: 'That property is no longer listed.' }, 404)
-      if (listing.available === false) return fail({ error: 'This home has been taken, so its contact is closed. No credit was used.' }, 410)
-      if (listing.sample || SAMPLE_IDS.has(String(listing.id)) || !listing.phone) {
-        const account = await creditAccount(env.DATABASE_URL, user.id)
-        return fail({
-          ok: true,
-          phone: null,
-          title: listing.title,
-          score: account.score,
-          freeFinder: account.freeFinder,
-          sample: Boolean(listing.sample || SAMPLE_IDS.has(String(listing.id))),
-        })
-      }
-      const opened = await openListingContact(env.DATABASE_URL, user.id, listing.id)
-      if (opened.error) return fail(opened, opened.status)
-      return fail({ ...opened, phone: listing.phone, title: listing.title, sample: false })
+      if (listing.available === false) return fail({ error: 'This home has been taken, so its contact is closed.' }, 410)
+      const sample = Boolean(listing.sample || SAMPLE_IDS.has(String(listing.id)))
+      return fail({ ok: true, title: listing.title, sample, phone: sample ? null : listing.phone || null })
     }
 
     if (url.pathname === '/api/listings' && request.method === 'GET') {

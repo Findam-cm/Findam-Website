@@ -118,7 +118,7 @@ export default function Admin({ member, authReady, access, onPublished }) {
       if (!response.ok) throw new Error(payload.error || 'The review could not be saved.')
       setMessage(kind === 'listing'
         ? decision === 'accepted' ? 'Listing accepted and published.' : 'Listing declined and kept off the public site.'
-        : decision === 'accepted' ? 'Referral accepted and credits added.' : 'Referral declined; no credits were added.')
+        : decision === 'accepted' ? 'Landlord referral accepted. Remember to reward the referrer when the landlord’s homes are let.' : 'Landlord referral declined.')
       await load()
       if (kind === 'listing' && decision === 'accepted') {
         try {
@@ -181,13 +181,13 @@ export default function Admin({ member, authReady, access, onPublished }) {
             </div>
           </article>) : <p>No property listings are waiting for review.</p>}
 
-          <h2>Referrals waiting for review <span>{referrals.length}</span></h2>
+          <h2>Landlord referrals waiting for review <span>{referrals.length}</span></h2>
           {loading && !referrals.length ? <p>Loading referrals…</p> : referrals.length ? referrals.map((item) => <article key={item.id}>
             <div>
               <b>{item.kind === 'landlord' ? 'Landlord' : 'Property'} · {item.contact_name}</b>
               <p>{item.neighbourhood}, {item.city} · {item.phone}</p>
               <p>{item.detail}</p>
-              <small>Submitted by {item.user_email} · {item.credits} credits if accepted</small>
+              <small>Referred by {item.user_email}{item.referrer_phone ? ` · ${item.referrer_phone}` : ''}</small>
             </div>
             <div className="admin-actions">
               <button className="primary" type="button" disabled={busy === item.id} onClick={() => review('referral', item.id, 'accepted')}>Accept</button>

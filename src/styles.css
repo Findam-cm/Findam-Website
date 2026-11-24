@@ -523,3 +523,20 @@ nav a.active,nav a:hover,.text-button:hover,a.text-button:hover,.type-tabs butto
   .listing-copy .price{font-size:16px}
   .badge{font-size:10px}
 }
+
+/* ===== Referral programme page ===== */
+.refer-lead{max-width:760px;font-size:17px}
+.reward-line{display:inline-block;margin:4px 0 0;padding:10px 14px;border-radius:10px;background:#edf7f0;color:#2c6a43;font-weight:700}
+.programme-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:24px 0 8px;padding:0;list-style:none}
+.programme-steps li{display:flex;gap:12px;align-items:flex-start;padding:16px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(135deg,#fff,#fff7f1)}
+.programme-steps .step-no{flex:0 0 28px;width:28px;height:28px;font-size:13px}
+.programme-steps b{display:block;margin-bottom:4px;font-size:15px}
+.programme-steps p{margin:0;color:#666;font-size:13px;line-height:1.45}
+.refer-form legend{font-size:17px}
+.terms-link{margin-top:14px;padding:10px 14px;font-size:13px}
+.refer-side .ticks li{line-height:1.45}
+@media(max-width:900px){.programme-steps{grid-template-columns:1fr 1fr}}
+@media(max-width:580px){.programme-steps{grid-template-columns:1fr}.refer-lead{font-size:16px}}
+.refer-side>h3:first-child{margin-top:0}
+.ticks li{position:relative;padding-left:24px}
+.ticks li:before{content:'✓';position:absolute;left:0;top:0;color:#2f8f5b;font-weight:700}

@@ -37,7 +37,7 @@ const TITLES = {
   admin: 'Admin | Findam',
   list: 'List a property | Findam',
   workflow: 'How Findam works | Findam',
-  refer: 'Refer and earn credits | Findam',
+  refer: 'Refer a landlord | Findam',
   alerts: 'Notifications | Findam',
   notfound: 'Page not found | Findam',
 }
@@ -100,7 +100,7 @@ function App() {
   const [catalogLoaded, setCatalogLoaded] = useState(false)
   listingsRef.current = liveListings
   const [member, setMember] = useState(null)
-  const [creditScore, setCreditScore] = useState(null)
+  const [referralCount, setReferralCount] = useState(0)
   const [authReady, setAuthReady] = useState(false)
   const [adminAccess, setAdminAccess] = useState('checking')
   const [alertsData, setAlertsData] = useState({ alerts: [], unread: 0, loading: false, error: '' })
@@ -140,18 +140,18 @@ function App() {
   }, [member])
   useEffect(() => {
     if (!member?.token) {
-      setCreditScore(null)
+      setReferralCount(0)
       setAdminAccess(authReady ? 'signed-out' : 'checking')
       return undefined
     }
     let ignore = false
     setAdminAccess('checking')
-    fetch('/api/credits', { headers: authHeadersFor(member) })
+    fetch('/api/account', { headers: authHeadersFor(member) })
       .then(async (response) => {
         const payload = await response.json().catch(() => ({}))
         if (!response.ok) throw new Error(payload.error || 'Admin access could not be verified.')
         if (ignore) return
-        setCreditScore(payload)
+        setReferralCount((payload.referrals || []).length)
         setAdminAccess(payload.admin ? 'admin' : 'not-admin')
       })
       .catch(() => { if (!ignore) setAdminAccess('unavailable') })
@@ -311,7 +311,7 @@ function App() {
         {navLink('/', 'home', 'Home')}
         {navLink(homesLink(filters), 'listings', 'Property listings')}
         {navLink('/cities', 'agents', 'House finders')}
-        {navLink('/refer', 'refer', 'Refer & earn')}
+        {navLink('/refer', 'refer', 'Refer a landlord')}
         {adminAccess === 'admin' ? navLink('/admin', 'admin', 'Admin') : null}
         {navLink('/saved', 'saved', 'Saved', savedIds.length ? <span className="nav-count">{savedIds.length}</span> : null)}
         {navLink('/account', 'account', member ? 'Account' : 'Sign up / Sign in')}
@@ -327,13 +327,13 @@ function App() {
     <main id="main">
       {page === 'home' && <Home listings={liveListings} filters={filters} update={updateFilters} search={() => go('listings')} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} navigate={navigate} />}
       {page === 'listings' && <Listings results={results} filters={filters} update={updateFilters} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} onAlert={createAlert} alertState={alertState} />}
-      {page === 'detail' && <Detail listing={selected} loaded={catalogLoaded} all={liveListings} back={backToListings} member={member} score={creditScore} onScore={setCreditScore} go={go} navigate={navigate} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} />}
+      {page === 'detail' && <Detail listing={selected} loaded={catalogLoaded} all={liveListings} back={backToListings} member={member} go={go} navigate={navigate} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} />}
       {page === 'agents' && <Agents navigate={navigate} />}
       {page === 'list' && <ListProperty member={member} go={go} onMember={setMember} isAdmin={adminAccess === 'admin'} />}
       {page === 'workflow' && <Workflow go={go} />}
       {page === 'saved' && <Saved listings={liveListings.filter((listing) => savedIds.includes(listing.id))} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} />}
-      {page === 'account' && <Account member={member} onMember={setMember} score={creditScore} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} />}
-      {page === 'refer' && <Refer member={member} onScore={setCreditScore} go={go} />}
+      {page === 'account' && <Account member={member} onMember={setMember} referralCount={referralCount} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} />}
+      {page === 'refer' && <Refer member={member} go={go} />}
       {page === 'admin' && <Admin member={member} authReady={authReady} access={adminAccess} onPublished={refreshPublicListings} />}
       {page === 'notfound' && <section className="shell section narrow not-found"><p className="kicker">ERROR 404</p><h1 className="page-title">This page does not exist</h1><p className="lead">The link may be old or mistyped. Try one of these instead.</p><div className="empty-actions left"><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link><Link to="/" navigate={navigate} className="secondary">Go to the home page</Link></div></section>}
       {page === 'alerts' && <Notifications member={member} data={alertsData} onSeen={markSeen} onDelete={deleteAlert} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} navigate={navigate} go={go} />}
@@ -362,7 +362,7 @@ function Footer({ navigate }) {
     <div><h2>Findam</h2><ul>
       {link('/how-it-works', 'How it works')}
       {link('/list', 'List a property')}
-      {link('/refer', 'Refer & earn credits')}
+      {link('/refer', 'Referral programme')}
       {link('/saved', 'Saved homes')}
       {link('/account', 'Your account')}
     </ul></div>
@@ -399,15 +399,15 @@ function Home({ listings: homeListings, filters, update, search, onOpen, savedId
         <button type="button" className={filters.type === 'Guest house' ? 'selected' : ''} aria-pressed={filters.type === 'Guest house'} onClick={() => update({ type: 'Guest house' })}>Guest house</button>
       </div>
       <HeroSearch filters={filters} update={update} search={search} />
-      <div className="trust-strip"><Trust icon="✓" title="Accepted listings" text="Public only after an admin accepts" /><Trust icon="⌖" title="City coverage" text="Bamenda, Buea and Yaounde" /><Trust icon="★" title="Credits" text="Refer a home to open contacts" /><Trust icon="🔔" title="Home alerts" text="Be told when a match appears" /></div>
+      <div className="trust-strip"><Trust icon="✓" title="Accepted listings" text="Public only after an admin accepts" /><Trust icon="⌖" title="City coverage" text="Bamenda, Buea and Yaounde" /><Trust icon="★" title="Referral programme" text="Refer a landlord and gain" /><Trust icon="🔔" title="Home alerts" text="Be told when a match appears" /></div>
     </div><div className="hero-visual"><div className="hero-photo" /><div className="verified-float">✓ <span>Agent visited<br />Engineer reviewed</span></div></div></div></section>
     <section className="shell featured section"><div className="section-head"><h2>Featured listings</h2><Link to="/homes" navigate={navigate} className="text-button">View all listings →</Link></div><div className="cards">{featured.map((item) => <ListingCard key={item.id} listing={item} onOpen={onOpen} saved={savedIds.includes(item.id)} onSave={onSave} />)}</div></section>
     <section className="shell section city-section"><div className="section-head"><h2>Browse by city</h2></div><div className="city-grid">{cities.map((city) => {
       const count = live.filter((item) => item.city === city).length
       return <Link key={city} to={homesLink({ city })} navigate={navigate} className="city-card"><b>{city}</b><span>{count} {count === 1 ? 'home' : 'homes'} available</span><span className="city-links"><span>Rent</span><span>Sale</span><span>Guest houses</span></span></Link>
     })}</div></section>
-    <section className="shell role-section"><Role icon="⌂" title="I'm a Landlord" text="List your property and get serious tenants faster." action="List Property" onClick={() => go('list')} /><Role icon="⌕" title="I'm a House Seeker" text="Find verified properties that match your needs." action="Start Searching" onClick={() => go('listings')} /><Role icon="♙" title="I know a vacant home" text="Refer it and its landlord to earn credits." action="Refer & earn" onClick={() => go('refer')} /></section>
-    <section className="workflow-preview"><div className="shell"><p className="kicker">HOW FINDAM WORKS</p><h2>Verified from visit to move-in.</h2><div className="steps"><Step number="1" title="Search" text="Filter by city, budget, bedrooms and type." /><Step number="2" title="Browse accepted homes" text="Only homes an admin has accepted appear publicly. Sample cards are marked." /><Step number="3" title="Open the contact" text="Use a credit to reach the landlord or house finder." /><Step number="4" title="Schedule viewing" text="Choose a time to see the home." /><Step number="5" title="Move in" text="Your agent supports the handover." /></div><p className="workflow-more"><Link to="/how-it-works" navigate={navigate} className="text-button">Read how Findam verifies homes →</Link></p></div></section>
+    <section className="shell role-section"><Role icon="⌂" title="I'm a Landlord" text="List your property and get serious tenants faster." action="List Property" onClick={() => go('list')} /><Role icon="⌕" title="I'm a House Seeker" text="Find verified properties that match your needs." action="Start Searching" onClick={() => go('listings')} /><Role icon="♙" title="I know a landlord" text="Refer them to Findam and gain when their homes are let." action="Refer a landlord" onClick={() => go('refer')} /></section>
+    <section className="workflow-preview"><div className="shell"><p className="kicker">HOW FINDAM WORKS</p><h2>Verified from visit to move-in.</h2><div className="steps"><Step number="1" title="Search" text="Filter by city, budget, bedrooms and type." /><Step number="2" title="Browse accepted homes" text="Only homes an admin has accepted appear publicly. Sample cards are marked." /><Step number="3" title="Open the contact" text="Sign in for free to reach the landlord or house finder." /><Step number="4" title="Schedule viewing" text="Choose a time to see the home." /><Step number="5" title="Move in" text="Your agent supports the handover." /></div><p className="workflow-more"><Link to="/how-it-works" navigate={navigate} className="text-button">Read how Findam verifies homes →</Link></p></div></section>
   </>
 }
 
@@ -415,7 +415,7 @@ function Trust({ icon, title, text }) { return <div className="trust"><i aria-hi
 function Role({ icon, title, text, action, onClick }) { return <article className="role"><i aria-hidden="true">{icon}</i><div><h3>{title}</h3><p>{text}</p><button onClick={onClick}>{action} →</button></div></article> }
 function Step({ number, title, text }) { return <article><b>{number}</b><h3>{title}</h3><p>{text}</p></article> }
 
-function Detail({ listing, loaded, all, back, member, score, onScore, go, navigate, onOpen, savedIds, onSave }) {
+function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, savedIds, onSave }) {
   const [contact, setContact] = useState(null)
   const [contactError, setContactError] = useState('')
   const [opening, setOpening] = useState(false)
@@ -425,7 +425,6 @@ function Detail({ listing, loaded, all, back, member, score, onScore, go, naviga
   if (!listing) return <section className="shell section"><div className="empty"><h1 className="empty-title">This home is no longer listed</h1><p>It may have been taken or removed.</p><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link></div></section>
   const available = isAvailable(listing)
   const badge = statusBadge(listing)
-  const freeFinder = (score?.freeFinder) || (score?.score >= 5)
   const similar = all.filter((item) => item.id !== listing.id && item.city === listing.city && isAvailable(item)).slice(0, 4)
   const photos = listing.photos || []
   const openContact = async () => {
@@ -437,7 +436,6 @@ function Detail({ listing, loaded, all, back, member, score, onScore, go, naviga
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'The contact could not be opened.')
       setContact(payload)
-      onScore?.((current) => ({ ...(current || {}), score: payload.score, freeFinder: payload.freeFinder }))
     } catch (error) {
       setContactError(error.message || 'The contact could not be opened.')
     } finally {
@@ -473,12 +471,12 @@ function Detail({ listing, loaded, all, back, member, score, onScore, go, naviga
       <h2 className="detail-price">{formatFcfa(listing.price)}</h2>
       <p className="price-period">{listing.period === 'sale' ? 'Full sale price' : PERIODS[listing.period]?.long}</p>
       {listing.period === 'year' ? <p className="price-note">About {formatFcfa(listing.price / 12)} a month</p> : null}
-      {!available ? <div className="taken-note"><b>This home has been taken.</b><p>It is no longer available, so its contact is closed and no credits are used.</p><Link to={homesLink({ city: listing.city, type: listing.type })} navigate={navigate} className="primary">See similar homes</Link></div>
-        : contact ? <div className="verified contact-box">{contact.phone ? <>Landlord: <a href={`tel:${contact.phone.replace(/\s/g, '')}`}>{contact.phone}</a></> : 'A house finder will arrange this viewing. Your credits cover the request.'}</div>
-        : <button className="primary" onClick={openContact} disabled={opening}>{!member ? 'Sign in to open contact' : listing.sample ? 'Open sample contact' : freeFinder ? 'Open contact free' : opening ? 'Opening…' : 'Use 1 credit to open contact'}</button>}
+      {!available ? <div className="taken-note"><b>This home has been taken.</b><p>It is no longer available, so its contact is closed.</p><Link to={homesLink({ city: listing.city, type: listing.type })} navigate={navigate} className="primary">See similar homes</Link></div>
+        : contact ? <div className="verified contact-box">{contact.phone ? <>Landlord: <a href={`tel:${contact.phone.replace(/\s/g, '')}`}>{contact.phone}</a></> : 'This is a sample home, so there is no real contact. A house finder will arrange viewings for real listings.'}</div>
+        : <button className="primary" onClick={openContact} disabled={opening}>{!member ? 'Sign in to see the contact' : opening ? 'Opening…' : 'Show the contact'}</button>}
       {contactError ? <p className="form-message warn">{contactError}</p> : null}
-      {available ? <p className="credit-hint">{freeFinder ? 'Your referral score opens contacts for free.' : <>Refer a property to earn credits. At 5 credits, contacts open free. <Link to="/refer" navigate={navigate}>Refer & earn</Link></>}</p> : null}
-      {listing.sample ? <div className="verified">Sample listing. A house finder has not inspected this home, and opening it does not spend credits.</div> : <div className="verified">Accepted by an admin and visible to house seekers.</div>}
+      {available && !member ? <p className="credit-hint">Creating an account is free and takes under a minute.</p> : null}
+      {listing.sample ? <div className="verified">Sample listing. A house finder has not inspected this home.</div> : <div className="verified">Accepted by an admin and visible to house seekers.</div>}
     </aside></div>
     {similar.length ? <section className="similar"><div className="section-head"><h2>More homes in {listing.city}</h2><Link to={homesLink({ city: listing.city })} navigate={navigate} className="text-button">See all in {listing.city} →</Link></div><div className="cards">{similar.map((item) => <ListingCard key={item.id} listing={item} onOpen={onOpen} saved={savedIds.includes(item.id)} onSave={onSave} />)}</div></section> : null}
   </section>
@@ -599,7 +597,9 @@ function HelpBot({ go, navigate }) {
   const botReply = (text) => {
     const value = text.toLowerCase()
     const has = (...words) => words.some((word) => value.includes(word))
-    if (/^(hi|hello|hey|good (morning|afternoon|evening))\b/.test(value.trim())) return 'Hello! Are you looking for a home, or do you want to list one? You can also ask about prices, alerts or credits.'
+    if (/^(hi|hello|hey|good (morning|afternoon|evening))\b/.test(value.trim())) return 'Hello! Are you looking for a home, or do you want to list one? You can also ask about prices, alerts or our referral programme.'
+    if (has('refer', 'credit', 'reward', 'commission', 'earn', 'gain', 'programme', 'program')) return 'Through the Findam Referral Programme you refer a landlord on the Refer page. We contact and verify them, and when their homes are let through Findam, you are rewarded.'
+    if (value.includes('agent') || value.includes('contact')) return 'Open a listing and press "Show the contact". It is free; you only need to be signed in.'
     if (has('how much', 'price', 'cost', 'budget', 'fcfa', 'cheap', 'afford', 'expensive', 'rent is', 'per month', 'per year')) return 'Prices are full amounts in FCFA. Rent shows per month or per year, guest houses per night, and sales show the full price. In search, type your budget in full, for example 150000 for 150,000 FCFA.'
     if (value.includes('notif') || value.includes('alert')) return 'Search for a home, then press "Notify me of new matches". New matching homes appear on the bell at the top of the page, and as a pop-up if you allow notifications.'
     if (value.includes('taken') || value.includes('available')) return 'Homes that are rented or sold are marked Taken and hidden from search, so you only see homes you can still get.'
@@ -607,10 +607,8 @@ function HelpBot({ go, navigate }) {
     if (value.includes('guest') || value.includes('short let')) return 'Guest houses are furnished stays, priced per night. Choose Guest house in the search filters to see them.'
     if (value.includes('list') || value.includes('landlord') || value.includes('photo')) return 'Sign in, then submit the title, city, the full price, bedrooms and photos. An admin reviews it before it appears publicly.'
     if (value.includes('city') || value.includes('location') || value.includes('map')) return 'Findam covers Bamenda, Buea and Yaounde. Filter by city or type a neighbourhood, then press "See location on map".'
-    if (value.includes('refer') || value.includes('credit') || value.includes('score')) return 'Refer a property, and its landlord if you know them. Accepted referrals add 2 credits for the property and 3 for the landlord. At 5 credits, property contacts open free.'
     if (value.includes('account') || value.includes('sign')) return 'Open Sign up at the top of the page to create a free account in under a minute.'
     if (has('room', 'house', 'apartment', 'studio', 'flat', 'home', 'rent', 'buy', 'hostel', 'bedroom')) return 'Open Property listings and filter by city, budget and bedrooms. Press "See location on map" to see where a home is, and "Notify me of new matches" to be told when a new one is published.'
-    if (value.includes('agent') || value.includes('contact')) return 'Open a listing and use your credits to request the contact. Findam does not publish a phone number on this site yet.'
     return 'I can help with finding a home, prices, alerts, listing a property, verification, cities and referrals. Could you tell me a little more?'
   }
   const sendMessage = (event) => { event.preventDefault(); const text = message.trim(); if (!text) return; setMessages((current) => [...current, { from: 'user', text }, { from: 'bot', text: botReply(text) }]); setMessage('') }

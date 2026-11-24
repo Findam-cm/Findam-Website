@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { authClient } from './auth.js'
 import { authHeadersFor } from './Refer.jsx'
 import { Modal, PasswordInput } from './ui.jsx'
-import { priceLine } from './price.js'
+import { formatFcfa, priceLine } from './price.js'
 
 function initialMode() {
   const params = new URLSearchParams(window.location.search)
@@ -13,7 +13,7 @@ function initialMode() {
 }
 
 const TITLES = {
-  signup: ['Create your Findam account', 'Free to join. See landlord contacts, save homes, get alerts when new homes match your search, list a property and refer landlords.'],
+  signup: ['Create your Findam account', 'Free to join. Save homes, get alerts when new homes match your search, list a property, refer landlords, and unlock contacts and locations with an access pass.'],
   signin: ['Welcome back', 'Sign in to see your saved homes, alerts, listings and referrals.'],
   forgot: ['Reset your password', 'Enter the email on your account. We will send a link to choose a new password.'],
   reset: ['Choose a new password', 'Enter a new password for your account.'],
@@ -28,7 +28,7 @@ function friendlyError(error, mode) {
   return text || (mode === 'signup' ? 'Your account could not be created. Try again.' : 'Sign in failed. Try again.')
 }
 
-export default function Account({ member, onMember, referralCount, savedCount, alertCount, go }) {
+export default function Account({ member, onMember, referralCount, savedCount, alertCount, go, passInfo, passLeft, onUnlock }) {
   const [loading, setLoading] = useState(true)
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('token') || '')
   const [mode, setMode] = useState(initialMode)
@@ -142,7 +142,7 @@ export default function Account({ member, onMember, referralCount, savedCount, a
     <p>{welcome.signedIn ? <>Welcome to Findam{welcome.name ? `, ${welcome.name}` : ''}! You are signed in as <b>{welcome.email}</b>.</> : <>We saved your account for <b>{welcome.email}</b>. Sign in with the password you just chose.</>}</p>
   </Modal> : null
 
-  if (loading) return <section className="shell section narrow"><p role="status">Checking your session…</p></section>
+  if (loading) return <section className="shell section narrow"><p className="kicker">YOUR ACCOUNT</p><h1 className="page-title">Your account</h1><p role="status" className="muted">Checking your session…</p></section>
 
   if (member && mode !== 'reset') return <section className="shell section">
     {welcomeModal}
@@ -152,6 +152,13 @@ export default function Account({ member, onMember, referralCount, savedCount, a
       <div><h1>{member.name || 'Findam member'}</h1><p>{member.email}</p></div>
       <button className="secondary" onClick={signOut}>Sign out</button>
     </div>
+    {passInfo?.admin ? null : <div className={`pass-card${passLeft ? ' on' : ''}`}>
+      <div>
+        <b>{passLeft ? '🔓 Access pass active' : '🔒 Contacts and locations are locked'}</b>
+        <p>{passLeft ? `You can see every landlord’s phone number and exact location for another ${passLeft}.` : `Unlock the landlord’s phone number and exact location of every home for ${passInfo?.hours || 24} hours.`}</p>
+      </div>
+      {passLeft ? null : <button className="primary" onClick={onUnlock}>Unlock · {formatFcfa(passInfo?.fee || 1000)}</button>}
+    </div>}
     <div className="stat-grid">
       <button type="button" className="stat" onClick={() => go('refer')}><strong>{referralCount ?? 0}</strong><span>Landlords referred</span><small>Referral programme</small></button>
       <button type="button" className="stat" onClick={() => go('saved')}><strong>{savedCount}</strong><span>Saved homes</span><small>Your shortlist</small></button>

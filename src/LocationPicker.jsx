@@ -45,7 +45,7 @@ export default function LocationPicker({ value, onChange, city }) {
   }, [])
 
   useEffect(() => {
-    if (value) place(value)
+    if (value) place(value, marker.current ? undefined : 18)
     else if (marker.current) { marker.current.remove(); marker.current = null }
   }, [value?.lat, value?.lng])
 

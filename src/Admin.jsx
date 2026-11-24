@@ -1,14 +1,23 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { authHeadersFor } from './Refer.jsx'
 import { priceLine } from './price.js'
+import { PaymentsPanel, RewardsList, VisitConfirm } from './AdminRewards.jsx'
 
 const LocationPicker = lazy(() => import('./LocationPicker.jsx'))
 
 // Lets the admin pin a listing's exact house. Visitors only ever see the pin.
 function PinEditor({ item, member, onSaved, onError }) {
   const [open, setOpen] = useState(false)
-  const [point, setPoint] = useState(item.exact ? { lat: item.lat, lng: item.lng } : null)
+  const [point, setPoint] = useState(item.exact && item.lat != null ? { lat: item.lat, lng: item.lng } : null)
   const [saving, setSaving] = useState(false)
+  // Public listing data no longer includes the exact pin, so fetch it (admins are always allowed).
+  useEffect(() => {
+    if (!open || !item.exact || point) return
+    fetch(`/api/listings/${encodeURIComponent(item.id)}/details`, { headers: authHeadersFor(member) })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => { if (data?.exact && data.lat != null) setPoint({ lat: data.lat, lng: data.lng }) })
+      .catch(() => {})
+  }, [open])
   const save = async (clear) => {
     setSaving(true)
     onError('')
@@ -45,6 +54,7 @@ export default function Admin({ member, authReady, access, onPublished }) {
   const [referrals, setReferrals] = useState([])
   const [listings, setListings] = useState([])
   const [published, setPublished] = useState([])
+  const [refreshKey, setRefreshKey] = useState(0)
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
@@ -70,6 +80,7 @@ export default function Admin({ member, authReady, access, onPublished }) {
       setReferrals(referralPayload.referrals || [])
       setListings(listingPayload.listings || [])
       setPublished(publicPayload.listings || [])
+      setRefreshKey((n) => n + 1)
     } catch (loadError) {
       setError(loadError.message || 'The admin dashboard could not be loaded.')
     } finally {
@@ -161,6 +172,7 @@ export default function Admin({ member, authReady, access, onPublished }) {
           <p>Signed in as <b>{member.email}</b></p>
           <button className="secondary" type="button" disabled={loading} onClick={load}>{loading ? 'Refreshing…' : 'Refresh queues'}</button>
         </div>
+        <PaymentsPanel member={member} refreshKey={refreshKey} />
         {message ? <p className="admin-message" role="status">{message}</p> : null}
         {error ? <p className="admin-error" role="alert">{error}</p> : null}
         <div className="admin-queue">
@@ -195,6 +207,10 @@ export default function Admin({ member, authReady, access, onPublished }) {
             </div>
           </article>) : <p>No referrals are waiting for review.</p>}
 
+          <h2>Referral rewards</h2>
+          <p className="muted">After you confirm a visit to a referred landlord’s home, the landlord pays the reward with Mobile Money and Findam sends it to the referrer.</p>
+          <RewardsList member={member} refreshKey={refreshKey} onMessage={setMessage} onError={setError} />
+
           <h2>Published homes <span>{published.length}</span></h2>
           <p className="muted">Mark a home as taken once it is rented or sold. It disappears from search and alerts, and its contact closes.</p>
           {published.map((item) => <article key={item.id}>
@@ -203,6 +219,7 @@ export default function Admin({ member, authReady, access, onPublished }) {
               <p>{item.neighbourhood}, {item.city} · {priceLine(item)}</p>
               <span className={`status-pill ${item.available === false ? 'taken' : 'live'}`}>{item.available === false ? 'Taken' : 'Available'}</span>
               <PinEditor item={item} member={member} onSaved={async (text) => { setMessage(text); await load(); await onPublished?.() }} onError={setError} />
+              {!item.sample ? <VisitConfirm item={item} member={member} onDone={(text) => { setMessage(text); setRefreshKey((n) => n + 1) }} onError={setError} /> : null}
             </div>
             <div className="admin-actions">
               <button className={item.available === false ? 'primary' : 'secondary'} type="button" disabled={busy === String(item.id)} onClick={() => setAvailable(item)}>{busy === String(item.id) ? 'Saving…' : item.available === false ? 'Mark available' : 'Mark as taken'}</button>

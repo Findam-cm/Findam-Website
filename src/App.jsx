@@ -7,6 +7,9 @@ import Refer, { authHeadersFor } from './Refer.jsx'
 import Admin from './Admin.jsx'
 import Listings from './Listings.jsx'
 import Notifications from './Notifications.jsx'
+import PayReward from './PayReward.jsx'
+import { PassModal, timeLeft, useClock } from './AccessPass.jsx'
+import { answer } from './botBrain.js'
 import { authClient } from './auth.js'
 import { Link, ListingCard, Modal, PriceInput, statusBadge } from './ui.jsx'
 import { filtersFromSearch, filtersToSearch, homesLink, isAvailable, matchesFilters, sortListings } from './filters.js'
@@ -40,6 +43,7 @@ const TITLES = {
   refer: 'Refer a landlord | Findam',
   alerts: 'Notifications | Findam',
   notfound: 'Page not found | Findam',
+  pay: 'Referral reward payment | Findam',
 }
 
 function pathFor(page) {
@@ -48,6 +52,7 @@ function pathFor(page) {
 
 function locationState(catalog, pathname = window.location.pathname) {
   const path = pathname.replace(/\/$/, '') || '/'
+  if (/^\/pay\/[0-9a-f]{48}$/.test(path)) return { page: 'pay', listing: null }
   const match = path.match(/^\/homes\/([^/]+)$/)
   if (match) {
     const id = decodeURIComponent(match[1])
@@ -101,6 +106,8 @@ function App() {
   listingsRef.current = liveListings
   const [member, setMember] = useState(null)
   const [referralCount, setReferralCount] = useState(0)
+  const [passInfo, setPassInfo] = useState(null)
+  const [passModal, setPassModal] = useState(false)
   const [authReady, setAuthReady] = useState(false)
   const [adminAccess, setAdminAccess] = useState('checking')
   const [alertsData, setAlertsData] = useState({ alerts: [], unread: 0, loading: false, error: '' })
@@ -157,6 +164,18 @@ function App() {
       .catch(() => { if (!ignore) setAdminAccess('unavailable') })
     return () => { ignore = true }
   }, [member, authReady])
+
+  // Access pass: price/duration for everyone, plus the member's active or pending pass.
+  const loadPass = useCallback(async () => {
+    try {
+      const response = await fetch('/api/pass', { headers: authHeadersFor(member) })
+      const payload = await response.json().catch(() => null)
+      if (response.ok && payload) setPassInfo(payload)
+    } catch {}
+  }, [member?.token])
+  useEffect(() => { if (authReady) loadPass() }, [authReady, member?.token, loadPass])
+  const passClock = useClock(passInfo?.active?.expiresAt, () => { loadPass(); setToast({ text: 'Your access pass has ended. Contacts and locations are locked again.', long: true }) })
+  const passLeft = timeLeft(passInfo?.active?.expiresAt, passClock)
 
   const loadAlerts = useCallback(async () => {
     if (!member?.token) return
@@ -319,6 +338,7 @@ function App() {
       </nav>
       <div className="nav-actions">
         {!member && authReady ? <Link to="/account" navigate={navigate} className="signup-pill">Sign up</Link> : null}
+        {member && passLeft && !passInfo?.admin ? <span className="pass-pill" title="Contacts and locations are unlocked">🔓 {passLeft}</span> : null}
         {member ? <Link to="/notifications" navigate={navigate} className={`bell${page === 'alerts' ? ' active' : ''}`} aria-label={alertsData.unread ? `Notifications, ${alertsData.unread} new` : 'Notifications'}><BellIcon />{alertsData.unread ? <span className="bell-badge">{alertsData.unread > 9 ? '9+' : alertsData.unread}</span> : null}</Link> : null}
         <Link to="/list" navigate={navigate} className="primary compact">List a property</Link>
         <button className="menu" onClick={() => setMenuOpen(!menuOpen)} aria-expanded={menuOpen} aria-controls="site-nav" aria-label={menuOpen ? 'Close menu' : 'Open menu'}><MenuIcon open={menuOpen} /></button>
@@ -327,19 +347,26 @@ function App() {
     <main id="main">
       {page === 'home' && <Home listings={liveListings} filters={filters} update={updateFilters} search={() => go('listings')} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} navigate={navigate} />}
       {page === 'listings' && <Listings results={results} filters={filters} update={updateFilters} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} onAlert={createAlert} alertState={alertState} />}
-      {page === 'detail' && <Detail listing={selected} loaded={catalogLoaded} all={liveListings} back={backToListings} member={member} go={go} navigate={navigate} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} />}
+      {page === 'detail' && <Detail listing={selected} loaded={catalogLoaded} all={liveListings} back={backToListings} member={member} go={go} navigate={navigate} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} passInfo={passInfo} passLeft={passLeft} onUnlock={() => setPassModal(true)} />}
       {page === 'agents' && <Agents navigate={navigate} />}
       {page === 'list' && <ListProperty member={member} go={go} onMember={setMember} isAdmin={adminAccess === 'admin'} />}
       {page === 'workflow' && <Workflow go={go} />}
       {page === 'saved' && <Saved listings={liveListings.filter((listing) => savedIds.includes(listing.id))} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} />}
-      {page === 'account' && <Account member={member} onMember={setMember} referralCount={referralCount} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} />}
+      {page === 'account' && <Account member={member} onMember={setMember} referralCount={referralCount} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} passInfo={passInfo} passLeft={passLeft} onUnlock={() => setPassModal(true)} />}
       {page === 'refer' && <Refer member={member} go={go} />}
       {page === 'admin' && <Admin member={member} authReady={authReady} access={adminAccess} onPublished={refreshPublicListings} />}
       {page === 'notfound' && <section className="shell section narrow not-found"><p className="kicker">ERROR 404</p><h1 className="page-title">This page does not exist</h1><p className="lead">The link may be old or mistyped. Try one of these instead.</p><div className="empty-actions left"><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link><Link to="/" navigate={navigate} className="secondary">Go to the home page</Link></div></section>}
+      {page === 'pay' && <PayReward navigate={navigate} />}
       {page === 'alerts' && <Notifications member={member} data={alertsData} onSeen={markSeen} onDelete={deleteAlert} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} navigate={navigate} go={go} />}
     </main>
-    <HelpBot go={go} navigate={navigate} />
+    <HelpBot go={go} navigate={navigate} passInfo={passInfo} />
     <Toast toast={toast} onClose={() => setToast(null)} />
+    {passModal && member ? <PassModal member={member} settings={passInfo} onClose={() => setPassModal(false)} onActive={(data) => {
+      setPassModal(false)
+      loadPass()
+      if (data?.active) setPassInfo((current) => ({ ...(current || {}), ...data, pending: null }))
+      setToast({ text: `Unlocked. You can see contacts and exact locations for ${passInfo?.hours || 24} hours.`, long: true })
+    }} /> : null}
     <Footer navigate={navigate} />
   </>
 }
@@ -407,7 +434,7 @@ function Home({ listings: homeListings, filters, update, search, onOpen, savedId
       return <Link key={city} to={homesLink({ city })} navigate={navigate} className="city-card"><b>{city}</b><span>{count} {count === 1 ? 'home' : 'homes'} available</span><span className="city-links"><span>Rent</span><span>Sale</span><span>Guest houses</span></span></Link>
     })}</div></section>
     <section className="shell role-section"><Role icon="⌂" title="I'm a Landlord" text="List your property and get serious tenants faster." action="List Property" onClick={() => go('list')} /><Role icon="⌕" title="I'm a House Seeker" text="Find verified properties that match your needs." action="Start Searching" onClick={() => go('listings')} /><Role icon="♙" title="I know a landlord" text="Refer them to Findam and gain when their homes are let." action="Refer a landlord" onClick={() => go('refer')} /></section>
-    <section className="workflow-preview"><div className="shell"><p className="kicker">HOW FINDAM WORKS</p><h2>Verified from visit to move-in.</h2><div className="steps"><Step number="1" title="Search" text="Filter by city, budget, bedrooms and type." /><Step number="2" title="Browse accepted homes" text="Only homes an admin has accepted appear publicly. Sample cards are marked." /><Step number="3" title="Open the contact" text="Sign in for free to reach the landlord or house finder." /><Step number="4" title="Schedule viewing" text="Choose a time to see the home." /><Step number="5" title="Move in" text="Your agent supports the handover." /></div><p className="workflow-more"><Link to="/how-it-works" navigate={navigate} className="text-button">Read how Findam verifies homes →</Link></p></div></section>
+    <section className="workflow-preview"><div className="shell"><p className="kicker">HOW FINDAM WORKS</p><h2>Verified from visit to move-in.</h2><div className="steps"><Step number="1" title="Search" text="Filter by city, budget, bedrooms and type." /><Step number="2" title="Browse accepted homes" text="Only homes an admin has accepted appear publicly. Sample cards are marked." /><Step number="3" title="Unlock the contact" text="A 24-hour access pass shows every landlord’s phone and the exact location." /><Step number="4" title="Schedule viewing" text="Choose a time to see the home." /><Step number="5" title="Move in" text="Your agent supports the handover." /></div><p className="workflow-more"><Link to="/how-it-works" navigate={navigate} className="text-button">Read how Findam verifies homes →</Link></p></div></section>
   </>
 }
 
@@ -415,33 +442,37 @@ function Trust({ icon, title, text }) { return <div className="trust"><i aria-hi
 function Role({ icon, title, text, action, onClick }) { return <article className="role"><i aria-hidden="true">{icon}</i><div><h3>{title}</h3><p>{text}</p><button onClick={onClick}>{action} →</button></div></article> }
 function Step({ number, title, text }) { return <article><b>{number}</b><h3>{title}</h3><p>{text}</p></article> }
 
-function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, savedIds, onSave }) {
-  const [contact, setContact] = useState(null)
-  const [contactError, setContactError] = useState('')
-  const [opening, setOpening] = useState(false)
+function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, savedIds, onSave, passInfo, passLeft, onUnlock }) {
+  const [details, setDetails] = useState(null)
+  const [detailsError, setDetailsError] = useState('')
   const [showMap, setShowMap] = useState(false)
-  useEffect(() => { setContact(null); setContactError(''); setShowMap(false) }, [listing?.id])
+  const unlocked = Boolean(member && (passInfo?.admin || passLeft))
+  useEffect(() => { setShowMap(false) }, [listing?.id])
+  // Contact and exact location come from the server only while the access pass is active.
+  useEffect(() => {
+    setDetails(null)
+    setDetailsError('')
+    if (!listing || !unlocked) return undefined
+    let ignore = false
+    fetch(`/api/listings/${encodeURIComponent(listing.id)}/details`, { headers: authHeadersFor(member) })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}))
+        if (ignore) return
+        if (response.ok) setDetails(payload)
+        else if (response.status !== 402) setDetailsError(payload.error || 'The details could not be loaded.')
+      })
+      .catch(() => { if (!ignore) setDetailsError('The details could not be loaded. Check your connection.') })
+    return () => { ignore = true }
+  }, [listing?.id, unlocked, member?.token])
   if (!listing && !loaded) return <section className="shell section"><p role="status" className="muted">Loading this home…</p></section>
   if (!listing) return <section className="shell section"><div className="empty"><h1 className="empty-title">This home is no longer listed</h1><p>It may have been taken or removed.</p><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link></div></section>
   const available = isAvailable(listing)
   const badge = statusBadge(listing)
   const similar = all.filter((item) => item.id !== listing.id && item.city === listing.city && isAvailable(item)).slice(0, 4)
   const photos = listing.photos || []
-  const openContact = async () => {
-    if (!member) { go('account'); return }
-    setOpening(true)
-    setContactError('')
-    try {
-      const response = await fetch(`/api/listings/${encodeURIComponent(listing.id)}/contact`, { method: 'POST', headers: authHeadersFor(member) })
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error || 'The contact could not be opened.')
-      setContact(payload)
-    } catch (error) {
-      setContactError(error.message || 'The contact could not be opened.')
-    } finally {
-      setOpening(false)
-    }
-  }
+  const unlock = () => { if (!member) go('account'); else onUnlock() }
+  const fee = formatFcfa(passInfo?.fee || 1000)
+  const hours = passInfo?.hours || 24
   return <section className="shell section">
     <div className="breadcrumbs" role="navigation" aria-label="Breadcrumb"><ol>
       <li><Link to="/" navigate={navigate}>Home</Link></li>
@@ -459,12 +490,17 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
       <h1 className="page-title">{listing.title}</h1>
       <p className="lead">{listing.description}</p>
       <div className="facts">{listing.beds ? <span>{listing.beds} {listing.beds === 1 ? 'Bedroom' : 'Bedrooms'}</span> : null}{listing.baths ? <span>{listing.baths} {listing.baths === 1 ? 'Bathroom' : 'Bathrooms'}</span> : null}{listing.size ? <span>{listing.size} m²</span> : null}<span>{PERIODS[listing.period]?.long === 'sale price' ? 'For sale' : `Paid ${PERIODS[listing.period]?.long || ''}`}</span></div>
-      <div className="location-block">
-        <div><h2>Location</h2><p>{listing.exact ? <>{listing.neighbourhood}, {listing.city}. The pin marks the house itself, and you can get directions from where you are.</> : <>{listing.neighbourhood}, {listing.city}. The map shows the neighbourhood; the house finder will guide you to the door.</>}</p></div>
-        <button type="button" className="secondary" aria-expanded={showMap} onClick={() => setShowMap(!showMap)}>{showMap ? 'Hide map' : 'See location'}</button>
+      <div className={`location-block${unlocked ? '' : ' locked'}`}>
+        <div><h2>{unlocked ? 'Location' : '🔒 Location'}</h2><p>{!unlocked
+          ? <>{listing.neighbourhood}, {listing.city}. {listing.exact ? 'The exact position of the house and directions to it' : 'The map'} unlock with an access pass.</>
+          : listing.exact ? <>{listing.neighbourhood}, {listing.city}. The pin marks the house itself, and you can get directions from where you are.</>
+            : <>{listing.neighbourhood}, {listing.city}. The map shows the neighbourhood; the house finder will guide you to the door.</>}</p></div>
+        {unlocked
+          ? <button type="button" className="secondary" aria-expanded={showMap} onClick={() => setShowMap(!showMap)} disabled={listing.exact && !details}>{showMap ? 'Hide map' : 'See location'}</button>
+          : <button type="button" className="primary" onClick={unlock}>{member ? 'Unlock location' : 'Sign in to unlock'}</button>}
       </div>
-      {showMap ? (listing.exact
-        ? <Suspense fallback={<p className="muted" role="status">Loading the map…</p>}><ExactMap lat={listing.lat} lng={listing.lng} title={listing.title} /></Suspense>
+      {unlocked && showMap ? (listing.exact && details?.exact
+        ? <Suspense fallback={<p className="muted" role="status">Loading the map…</p>}><ExactMap lat={details.lat} lng={details.lng} title={listing.title} /></Suspense>
         : <SearchMap compact city={listing.city} query={listing.neighbourhood} listings={[listing]} />) : null}
     </div><aside>
       <p className="kicker">PRICE</p>
@@ -472,10 +508,19 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
       <p className="price-period">{listing.period === 'sale' ? 'Full sale price' : PERIODS[listing.period]?.long}</p>
       {listing.period === 'year' ? <p className="price-note">About {formatFcfa(listing.price / 12)} a month</p> : null}
       {!available ? <div className="taken-note"><b>This home has been taken.</b><p>It is no longer available, so its contact is closed.</p><Link to={homesLink({ city: listing.city, type: listing.type })} navigate={navigate} className="primary">See similar homes</Link></div>
-        : contact ? <div className="verified contact-box">{contact.phone ? <>Landlord: <a href={`tel:${contact.phone.replace(/\s/g, '')}`}>{contact.phone}</a></> : 'This is a sample home, so there is no real contact. A house finder will arrange viewings for real listings.'}</div>
-        : <button className="primary" onClick={openContact} disabled={opening}>{!member ? 'Sign in to see the contact' : opening ? 'Opening…' : 'Show the contact'}</button>}
-      {contactError ? <p className="form-message warn">{contactError}</p> : null}
-      {available && !member ? <p className="credit-hint">Creating an account is free and takes under a minute.</p> : null}
+        : unlocked ? <div className="contact-box unlocked">
+          {details ? (details.phone
+            ? <><span className="contact-label">Landlord’s phone</span><a className="contact-phone" href={`tel:${details.phone.replace(/\s/g, '')}`}>{details.phone}</a><a className="secondary contact-call" href={`tel:${details.phone.replace(/\s/g, '')}`}>Call now</a></>
+            : <p>This is a sample home, so there is no real contact. Real listings show the landlord’s phone here.</p>)
+            : detailsError ? <p className="form-message warn">{detailsError}</p> : <p className="muted">Loading the contact…</p>}
+          {passInfo?.admin ? <small className="pass-left">Admin access</small> : passLeft ? <small className="pass-left">Your access pass ends in {passLeft}</small> : null}
+        </div>
+        : <div className="locked-card">
+          <b>🔒 Contact and exact location are locked</b>
+          <p>Get a {hours}-hour access pass to see the landlord’s phone number and the exact location of every home on Findam.</p>
+          <button className="primary" onClick={unlock}>{member ? `Unlock for ${hours} hours · ${fee}` : 'Sign in to unlock'}</button>
+          {!member ? <small>Creating an account is free and takes under a minute.</small> : null}
+        </div>}
       {listing.sample ? <div className="verified">Sample listing. A house finder has not inspected this home.</div> : <div className="verified">Accepted by an admin and visible to house seekers.</div>}
     </aside></div>
     {similar.length ? <section className="similar"><div className="section-head"><h2>More homes in {listing.city}</h2><Link to={homesLink({ city: listing.city })} navigate={navigate} className="text-button">See all in {listing.city} →</Link></div><div className="cards">{similar.map((item) => <ListingCard key={item.id} listing={item} onOpen={onOpen} saved={savedIds.includes(item.id)} onSave={onSave} />)}</div></section> : null}
@@ -590,31 +635,15 @@ function Workflow({ go }) { return <section className="shell section"><p classNa
 
 function Saved({ listings, onOpen, savedIds, onSave, go }) { return <section className="shell section"><p className="kicker">YOUR SHORTLIST</p><h1 className="page-title">Saved properties</h1>{listings.length ? <div className="cards saved-grid">{listings.map((listing) => <ListingCard key={listing.id} listing={listing} onOpen={onOpen} saved={savedIds.includes(listing.id)} onSave={onSave} />)}</div> : <div className="empty"><h2>No saved homes yet</h2><p>Tap the heart on any home to keep it here.</p><button className="primary" onClick={() => go('listings')}>Browse verified listings</button></div>}</section> }
 
-function HelpBot({ go, navigate }) {
+function HelpBot({ go, navigate, passInfo }) {
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
-  const [messages, setMessages] = useState([{ from: 'bot', text: 'Hi! I am Findam Bot. Ask about homes, prices, alerts, verification or listing a property.' }])
-  const botReply = (text) => {
-    const value = text.toLowerCase()
-    const has = (...words) => words.some((word) => value.includes(word))
-    if (/^(hi|hello|hey|good (morning|afternoon|evening))\b/.test(value.trim())) return 'Hello! Are you looking for a home, or do you want to list one? You can also ask about prices, alerts or our referral programme.'
-    if (has('refer', 'credit', 'reward', 'commission', 'earn', 'gain', 'programme', 'program')) return 'Through the Findam Referral Programme you refer a landlord on the Refer page. We contact and verify them, and when their homes are let through Findam, you are rewarded.'
-    if (value.includes('agent') || value.includes('contact')) return 'Open a listing and press "Show the contact". It is free; you only need to be signed in.'
-    if (has('how much', 'price', 'cost', 'budget', 'fcfa', 'cheap', 'afford', 'expensive', 'rent is', 'per month', 'per year')) return 'Prices are full amounts in FCFA. Rent shows per month or per year, guest houses per night, and sales show the full price. In search, type your budget in full, for example 150000 for 150,000 FCFA.'
-    if (value.includes('notif') || value.includes('alert')) return 'Search for a home, then press "Notify me of new matches". New matching homes appear on the bell at the top of the page, and as a pop-up if you allow notifications.'
-    if (value.includes('taken') || value.includes('available')) return 'Homes that are rented or sold are marked Taken and hidden from search, so you only see homes you can still get.'
-    if (value.includes('verif') || value.includes('safe')) return 'A new listing stays off the public site until an admin accepts it. Homes marked Sample are demo data, not inspected properties.'
-    if (value.includes('guest') || value.includes('short let')) return 'Guest houses are furnished stays, priced per night. Choose Guest house in the search filters to see them.'
-    if (value.includes('list') || value.includes('landlord') || value.includes('photo')) return 'Sign in, then submit the title, city, the full price, bedrooms and photos. An admin reviews it before it appears publicly.'
-    if (value.includes('city') || value.includes('location') || value.includes('map')) return 'Findam covers Bamenda, Buea and Yaounde. Filter by city or type a neighbourhood, then press "See location on map".'
-    if (value.includes('account') || value.includes('sign')) return 'Open Sign up at the top of the page to create a free account in under a minute.'
-    if (has('room', 'house', 'apartment', 'studio', 'flat', 'home', 'rent', 'buy', 'hostel', 'bedroom')) return 'Open Property listings and filter by city, budget and bedrooms. Press "See location on map" to see where a home is, and "Notify me of new matches" to be told when a new one is published.'
-    return 'I can help with finding a home, prices, alerts, listing a property, verification, cities and referrals. Could you tell me a little more?'
-  }
+  const [messages, setMessages] = useState([{ from: 'bot', text: 'Hi! I am Findam Bot. Ask me about homes, prices, the access pass, paying with MTN or Orange Money, listing a property or the referral programme.' }])
+  const botReply = (text) => answer(text, { fee: passInfo?.fee, hours: passInfo?.hours }).text
   const sendMessage = (event) => { event.preventDefault(); const text = message.trim(); if (!text) return; setMessages((current) => [...current, { from: 'user', text }, { from: 'bot', text: botReply(text) }]); setMessage('') }
   const quickReply = (text) => setMessages((current) => [...current, { from: 'user', text }, { from: 'bot', text: botReply(text) }])
   return <div className="bot-widget">
-    {open && <section className="bot-panel" aria-label="Findam Bot"><header><span className="bot-logo" aria-hidden="true">🤖</span><div><b>Findam Bot</b><small>Online · replies instantly</small></div><button onClick={() => setOpen(false)} aria-label="Close help">×</button></header><div className="bot-chat" aria-live="polite">{messages.map((item, index) => <p className={item.from} key={`${item.from}-${index}`}>{item.text}</p>)}</div><form className="bot-input" onSubmit={sendMessage}><input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type your message..." aria-label="Message Findam Bot" /><button type="submit" aria-label="Send message">➤</button></form><div className="bot-actions"><button onClick={() => quickReply('How do prices work?')}>Prices</button><button onClick={() => quickReply('How do alerts work?')}>Alerts</button><button onClick={() => { navigate(homesLink({ type: 'Rent' })); setOpen(false) }}>Find a home</button><button onClick={() => { go('list'); setOpen(false) }}>List a property</button></div></section>}
+    {open && <section className="bot-panel" aria-label="Findam Bot"><header><span className="bot-logo" aria-hidden="true">🤖</span><div><b>Findam Bot</b><small>Online · replies instantly</small></div><button onClick={() => setOpen(false)} aria-label="Close help">×</button></header><div className="bot-chat" aria-live="polite">{messages.map((item, index) => <p className={item.from} key={`${item.from}-${index}`}>{item.text}</p>)}</div><form className="bot-input" onSubmit={sendMessage}><input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type your message..." aria-label="Message Findam Bot" /><button type="submit" aria-label="Send message">➤</button></form><div className="bot-actions"><button onClick={() => quickReply('How much is the access pass?')}>Access pass</button><button onClick={() => quickReply('How do I pay?')}>Payments</button><button onClick={() => quickReply('How does the referral programme work?')}>Referrals</button><button onClick={() => { navigate(homesLink({ type: 'Rent' })); setOpen(false) }}>Find a home</button><button onClick={() => { go('list'); setOpen(false) }}>List a property</button></div></section>}
     <button className="whatsapp" onClick={() => setOpen(!open)} aria-label={open ? 'Close Findam Bot' : 'Open Findam Bot'} aria-expanded={open}><span className="floating-bot" aria-hidden="true">🤖</span><span>Findam Bot</span></button>
   </div>
 }

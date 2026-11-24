@@ -1,5 +1,9 @@
 import { seed } from './seed.js'
-import { addAlert, addReferral, checkPostgres, deleteAlert, listAlerts, listPendingReferrals, markAlertsSeen, memberAccount, reviewReferral } from './db.js'
+import { activePass, latestPass } from './db.js'
+import { addAlert, addReferral, checkPostgres, createReward, deleteAlert, findAcceptedReferralByPhone, getReferral, getReward, listAlerts, listPendingReferrals, listRewards, markAlertsSeen, memberAccount, reviewReferral, rewardsForListing, transitionReward } from './db.js'
+import { applicationStatus, mesombConfigured } from './mesomb.js'
+import { landlordView, refreshReward, startCollect, startPayout } from './rewards.js'
+import { buyPass, passSettings, passView, refreshPass } from './passes.js'
 import { allowedOrigins, isAdmin, requireUser } from './session.js'
 import { EMPTY_FILTERS, describeFilters, matchesFilters } from '../src/filters.js'
 
@@ -38,9 +42,15 @@ function isPublicListing(listing) {
 }
 
 function publicListing(listing) {
-  const { phone, submittedBy, submittedEmail, ...visible } = listing
+  const { phone, submittedBy, submittedEmail, visitConfirmedBy, ...visible } = listing
   if (SAMPLE_IDS.has(String(listing.id))) visible.sample = true
   visible.available = listing.available !== false
+  // The exact house position is part of the locked details (access pass); the public data only
+  // says that an exact pin exists.
+  if (listing.exact) {
+    delete visible.lat
+    delete visible.lng
+  }
   return visible
 }
 
@@ -104,6 +114,18 @@ async function setExactLocation(bucket, listingId, point) {
     }
     await writeCatalog(bucket, catalog)
     return { ok: true, id: String(listing.id), exact: listing.exact, lat: listing.lat, lng: listing.lng }
+  })
+}
+
+async function confirmVisit(bucket, listingId, adminEmail) {
+  return withCatalog(async () => {
+    const catalog = await readCatalog(bucket)
+    const listing = findListing(catalog, listingId)
+    if (!listing) return { error: 'That listing was not found.', status: 404 }
+    listing.visitConfirmedAt = new Date().toISOString()
+    listing.visitConfirmedBy = adminEmail
+    await writeCatalog(bucket, catalog)
+    return { listing }
   })
 }
 
@@ -371,7 +393,11 @@ async function servePage(request, env, url) {
   let [title, description] = PAGE_TITLES[path] || []
   let image = `${SITE}/og-image.png`
   const detail = path.match(/^\/homes\/([^/]+)$/)
-  if (detail) {
+  const payPage = /^\/pay\/[0-9a-f]{48}$/.test(path)
+  if (payPage) {
+    title = 'Referral reward payment | Findam'
+    description = 'Pay a Findam referral reward with MTN Mobile Money or Orange Money.'
+  } else if (detail) {
     const catalog = await readCatalog(env.LISTINGS)
     const listing = [...catalog.listings, ...catalog.submissions].find((item) => String(item.id) === decodeURIComponent(detail[1]))
     if (listing && isPublicListing(listing)) {
@@ -404,7 +430,7 @@ async function servePage(request, env, url) {
     .on('meta[property="og:image"]', { element(el) { el.setAttribute('content', image) } })
     .on('meta[property="og:url"]', { element(el) { el.setAttribute('content', canonical) } })
     .on('link[rel="canonical"]', { element(el) { el.setAttribute('href', canonical) } })
-    .on('head', { element(el) { if (status === 404 || path === '/admin' || path === '/account') el.append('<meta name="robots" content="noindex">', { html: true }) } })
+    .on('head', { element(el) { if (status === 404 || payPage || path === '/admin' || path === '/account') el.append('<meta name="robots" content="noindex">', { html: true }) } })
     .transform(shell)
   const response = new Response(rewritten.body, { status, headers: rewritten.headers })
   response.headers.set('Cache-Control', 'public, max-age=0, must-revalidate')
@@ -589,16 +615,164 @@ export default {
     }
 
     const contactMatch = url.pathname.match(/^\/api\/listings\/([^/]+)\/contact$/)
-    // Any signed-in member can see a listing's contact; there is no charge.
-    if (contactMatch && request.method === 'POST') {
+    // ---- Referral reward payments (MeSomb) ----
+    const payMatch = url.pathname.match(/^\/api\/pay\/([0-9a-f]{48})$/)
+    if (payMatch && (request.method === 'GET' || request.method === 'POST')) {
+      if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
+      let reward = await getReward(env.DATABASE_URL, { token: payMatch[1] })
+      if (!reward) return fail({ error: 'This payment link is not valid.' }, 404)
+      const configured = mesombConfigured(env)
+      if (request.method === 'GET') {
+        if (configured) reward = await refreshReward(env, env.DATABASE_URL, reward)
+        return fail(landlordView(reward, configured))
+      }
+      if (!configured) return fail({ error: 'Mobile Money payments are not switched on yet. Please try again later.' }, 503)
+      const body = await request.json().catch(() => ({}))
+      const started = await startCollect(env, env.DATABASE_URL, reward, { service: String(body.service || '').toUpperCase(), phone: body.phone })
+      if (started.error) return fail({ error: started.error }, started.status)
+      return fail(landlordView(started.reward, configured))
+    }
+
+    if (url.pathname.startsWith('/api/admin/') && /^\/api\/admin\/(payments|rewards|listings\/[^/]+\/(visit|reward-match))/.test(url.pathname)) {
+      if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
       const user = await requireUser(request, env)
-      if (!user) return fail({ error: 'Sign in to see this contact.' }, 401)
+      if (!user) return fail({ error: 'Sign in first.' }, 401)
+      if (!isAdmin(user, env)) return fail({ error: 'Only an admin can manage referral rewards.' }, 403)
+      const db = env.DATABASE_URL
+      const configured = mesombConfigured(env)
+      const payLink = (reward) => `${url.origin}/pay/${reward.token}`
+      const defaultAmount = Math.max(0, Math.round(Number(env.REFERRAL_REWARD_FCFA) || 0)) || null
+
+      if (url.pathname === '/api/admin/payments' && request.method === 'GET') {
+        let balance = null
+        let problem = null
+        if (configured) {
+          const status = await applicationStatus(env)
+          if (status.ok) balance = (status.data?.balances || []).reduce((sum, item) => sum + Number(item.value || 0), 0)
+          else problem = status.error
+        }
+        return fail({ configured, balance, problem, defaultAmount })
+      }
+
+      if (url.pathname === '/api/admin/rewards' && request.method === 'GET') {
+        let rewards = await listRewards(db)
+        if (configured) {
+          const busy = rewards.filter((item) => item.status === 'collecting' || item.status === 'paying_out').slice(0, 5)
+          for (const item of busy) await refreshReward(env, db, item)
+          if (busy.length) rewards = await listRewards(db)
+        }
+        return fail({ rewards: rewards.map((item) => ({ ...item, payLink: payLink(item) })), configured })
+      }
+
+      const rewardAction = url.pathname.match(/^\/api\/admin\/rewards\/([0-9a-f-]{36})\/(payout|prompt|cancel)$/)
+      if (rewardAction && request.method === 'POST') {
+        const reward = await getReward(db, { id: rewardAction[1] })
+        if (!reward) return fail({ error: 'That reward was not found.' }, 404)
+        const body = await request.json().catch(() => ({}))
+        if (rewardAction[2] === 'cancel') {
+          const cancelled = await transitionReward(db, reward.id, ['requested', 'collect_failed'], 'cancelled', { last_error: 'Cancelled by an admin.' })
+          if (!cancelled) return fail({ error: 'Only a reward that has not been paid can be cancelled.' }, 409)
+          return fail({ reward: { ...cancelled, payLink: payLink(cancelled) } })
+        }
+        if (!configured) return fail({ error: 'Connect MeSomb first: add the three MeSomb keys as Worker secrets.' }, 503)
+        const done = rewardAction[2] === 'payout'
+          ? await startPayout(env, db, reward, String(body.service || '').toUpperCase())
+          : await startCollect(env, db, reward, { service: String(body.service || '').toUpperCase(), phone: reward.landlord_phone })
+        if (done.error) return fail({ error: done.error }, done.status)
+        return fail({ reward: { ...done.reward, payLink: payLink(done.reward) } })
+      }
+
+      const listingAction = url.pathname.match(/^\/api\/admin\/listings\/([^/]+)\/(visit|reward-match)$/)
+      if (listingAction) {
+        const catalog = await readCatalog(env.LISTINGS)
+        const listing = findListing(catalog, decodeURIComponent(listingAction[1]))
+        if (!listing) return fail({ error: 'That listing was not found.' }, 404)
+        if (listingAction[2] === 'reward-match' && request.method === 'GET') {
+          const referral = listing.phone ? await findAcceptedReferralByPhone(db, listing.phone) : null
+          const existing = await rewardsForListing(db, listing.id)
+          return fail({
+            listing: { id: String(listing.id), title: listing.title, phone: listing.phone || null, visitConfirmedAt: listing.visitConfirmedAt || null },
+            referral: referral ? { id: referral.id, landlord: referral.contact_name, referrerEmail: referral.user_email, referrerPhone: referral.referrer_phone } : null,
+            rewards: existing.map((item) => ({ ...item, payLink: payLink(item) })),
+            defaultAmount,
+            configured,
+          })
+        }
+        if (listingAction[2] === 'visit' && request.method === 'POST') {
+          const body = await request.json().catch(() => ({}))
+          const confirmed = await confirmVisit(env.LISTINGS, listing.id, user.email)
+          if (confirmed.error) return fail({ error: confirmed.error }, confirmed.status)
+          if (!body.referralId) return fail({ ok: true, visitConfirmedAt: confirmed.listing.visitConfirmedAt, reward: null })
+          const amount = Math.round(Number(body.amount))
+          if (!Number.isFinite(amount) || amount < 100 || amount > 5000000) return fail({ error: 'Enter the reward amount in FCFA (at least 100).' }, 400)
+          if (!/^[0-9a-f-]{36}$/i.test(String(body.referralId))) return fail({ error: 'Choose the referral to reward.' }, 400)
+          const referral = await getReferral(db, body.referralId)
+          if (!referral || referral.status !== 'accepted') return fail({ error: 'Only an accepted landlord referral can be rewarded.' }, 400)
+          if (!listing.phone) return fail({ error: 'This listing has no landlord phone number to request the payment from.' }, 400)
+          const created = await createReward(db, {
+            referralId: referral.id,
+            listingId: String(listing.id),
+            listingTitle: listing.title,
+            amount,
+            landlordPhone: listing.phone,
+            referrerPhone: referral.referrer_phone,
+            referrerEmail: referral.user_email,
+          })
+          if (created.error) return fail({ error: created.error }, created.status)
+          return fail({ ok: true, visitConfirmedAt: confirmed.listing.visitConfirmedAt, reward: { ...created.reward, payLink: payLink(created.reward) } }, 201)
+        }
+      }
+      return fail({ error: 'Not found.' }, 404)
+    }
+
+    // ---- Access pass ----
+    if (url.pathname === '/api/pass' && (request.method === 'GET' || request.method === 'POST')) {
+      const settings = passSettings(env)
+      const user = await requireUser(request, env)
+      if (request.method === 'GET') {
+        if (!user || !env.DATABASE_URL) return fail({ ...settings, configured: mesombConfigured(env), active: null, pending: null, admin: false })
+        const admin = isAdmin(user, env)
+        let latest = await latestPass(env.DATABASE_URL, user.id)
+        if (latest?.status === 'pending') latest = await refreshPass(env, env.DATABASE_URL, latest)
+        const active = await activePass(env.DATABASE_URL, user.id)
+        return fail({ ...settings, configured: mesombConfigured(env), admin, active: passView(active), pending: latest?.status === 'pending' ? passView(latest) : null, lastFailed: latest?.status === 'failed' ? passView(latest) : null })
+      }
+      if (!user) return fail({ error: 'Sign in to buy an access pass.' }, 401)
+      if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
+      const body = await request.json().catch(() => ({}))
+      const bought = await buyPass(env, env.DATABASE_URL, user, { service: String(body.service || '').toUpperCase(), phone: body.phone })
+      if (bought.error) return fail({ error: bought.error, pass: passView(bought.pass) }, bought.status)
+      return fail({ ...settings, pass: passView(bought.pass) })
+    }
+
+    // Contact and exact location of a listing: only with an active access pass (admins always).
+    const detailsMatch = url.pathname.match(/^\/api\/listings\/([^/]+)\/details$/)
+    if ((detailsMatch && request.method === 'GET') || (contactMatch && request.method === 'POST')) {
+      const user = await requireUser(request, env)
+      if (!user) return fail({ error: 'Sign in to unlock contacts and locations.', locked: true }, 401)
       const catalog = await readCatalog(env.LISTINGS)
-      const listing = [...catalog.listings, ...catalog.submissions].find((item) => String(item.id) === decodeURIComponent(contactMatch[1]))
-      if (!listing || !isPublicListing(listing)) return fail({ error: 'That property is no longer listed.' }, 404)
-      if (listing.available === false) return fail({ error: 'This home has been taken, so its contact is closed.' }, 410)
+      const id = decodeURIComponent((detailsMatch || contactMatch)[1])
+      const listing = [...catalog.listings, ...catalog.submissions].find((item) => String(item.id) === id)
+      const admin = isAdmin(user, env)
+      if (!listing || (!isPublicListing(listing) && !admin)) return fail({ error: 'That property is no longer listed.' }, 404)
+      let pass = null
+      if (!admin) {
+        if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
+        pass = await activePass(env.DATABASE_URL, user.id)
+        if (!pass) return fail({ error: 'Get an access pass to see contacts and exact locations.', locked: true, ...passSettings(env) }, 402)
+        if (listing.available === false) return fail({ error: 'This home has been taken, so its contact is closed.' }, 410)
+      }
       const sample = Boolean(listing.sample || SAMPLE_IDS.has(String(listing.id)))
-      return fail({ ok: true, title: listing.title, sample, phone: sample ? null : listing.phone || null })
+      return fail({
+        ok: true,
+        title: listing.title,
+        sample,
+        phone: sample ? null : listing.phone || null,
+        exact: Boolean(listing.exact),
+        lat: listing.lat ?? null,
+        lng: listing.lng ?? null,
+        expiresAt: pass?.expires_at || null,
+      })
     }
 
     if (url.pathname === '/api/listings' && request.method === 'GET') {

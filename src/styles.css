@@ -540,3 +540,80 @@ nav a.active,nav a:hover,.text-button:hover,a.text-button:hover,.type-tabs butto
 .refer-side>h3:first-child{margin-top:0}
 .ticks li{position:relative;padding-left:24px}
 .ticks li:before{content:'✓';position:absolute;left:0;top:0;color:#2f8f5b;font-weight:700}
+
+/* ===== Payments: access pass, referral rewards (MeSomb) ===== */
+.pay-page .pay-card{margin-top:18px;padding:22px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(135deg,#fff,#fff6ef)}
+.pay-label{display:block;color:#777;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.pay-amount{display:block;margin:4px 0 6px;color:var(--ink);font-size:34px;line-height:1.1}
+.pay-for{display:block;color:#555;font-size:14px}
+.pay-card p{margin:12px 0 0;color:#555;font-size:14px;line-height:1.55}
+.pay-form{display:flex;flex-direction:column;gap:12px;margin-top:18px}
+.pay-networks{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0;padding:0;border:0}
+.pay-networks legend{margin-bottom:8px;color:#444;font-size:13px;font-weight:700}
+.network{display:flex;align-items:center;gap:10px;padding:14px;border:2px solid var(--line);border-radius:12px;background:#fff;font-weight:700;font-size:14px;cursor:pointer}
+.network input{position:absolute;opacity:0;width:1px;height:1px}
+.network-dot{flex:0 0 22px;width:22px;height:22px;border-radius:50%}
+.network.mtn .network-dot{background:#ffcc00}
+.network.orange .network-dot{background:#ff7900}
+.network.mtn.selected{border-color:#e6b800;background:#fffbe6}
+.network.orange.selected{border-color:#ff7900;background:#fff4ec}
+.network:focus-within{outline:2px solid var(--orange);outline-offset:2px}
+.pay-phone{display:flex;flex-direction:column;gap:6px;color:#444;font-size:13px;font-weight:700}
+.pay-phone input{padding:13px;border:1px solid #e3dcd5;border-radius:10px;font-size:17px;letter-spacing:.5px}
+.pay-phone small{color:#888;font-weight:400}
+.pay-secure{margin:0;color:#777;font-size:12px;text-align:center}
+.pay-wait{display:flex;gap:16px;align-items:flex-start;margin-top:18px;padding:18px;border-radius:14px;background:#fff8e6}
+.pay-wait.compact{margin-top:8px;text-align:left}
+.pay-wait h2{margin:0 0 6px;font-size:18px}
+.pay-wait p{margin:0 0 6px;color:#555;font-size:14px;line-height:1.5}
+.spinner{flex:0 0 28px;width:28px;height:28px;border:3px solid #ffd9bf;border-top-color:var(--orange);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.spinner{animation-duration:3s}}
+.pay-done{margin-top:18px;padding:24px;border-radius:14px;background:#edf7f0;text-align:center}
+.pay-done h2{margin:0 0 6px}.pay-done p{margin:0;color:#3a6a4a}
+.pass-modal{position:relative;text-align:left;width:min(460px,100%)}
+.pass-modal h2,.pass-modal>p,.pass-modal .modal-icon{text-align:center}
+.pass-modal>p{margin-bottom:6px}
+.modal-icon.lock{background:#fff0e6;color:var(--orange);font-size:24px}
+.modal-x{position:absolute;top:10px;right:10px;width:38px;height:38px;border:0;border-radius:50%;background:#f4efea;color:#444;font-size:22px;line-height:1}
+.pass-price{margin:10px 0 14px!important;color:var(--orange-text);font-size:28px;font-weight:700}
+.pass-price span{color:#777;font-size:14px;font-weight:500}
+.locked-card{display:flex;flex-direction:column;gap:8px;margin:16px 0;padding:16px;border:1px dashed #f3b48a;border-radius:12px;background:#fff}
+.locked-card p{margin:0;color:#555;font-size:13px;line-height:1.5}
+.locked-card .primary{width:100%;margin:4px 0 0}
+.locked-card small{color:#777;font-size:12px}
+.location-block.locked{background:#fff7f1;border-style:dashed}
+.contact-box.unlocked{display:flex;flex-direction:column;gap:6px}
+.contact-label{color:#777;font-size:12px;font-weight:700;text-transform:uppercase}
+.contact-phone{color:var(--ink)!important;font-size:22px;font-weight:700;text-decoration:none}
+.contact-call{margin-top:4px;padding:10px;font-size:14px}
+.pass-left{color:#2f8f5b;font-size:12px;font-weight:700}
+.pass-pill{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border-radius:999px;background:#edf7f0;color:#2c6a43;font-size:12px;font-weight:700;white-space:nowrap}
+.pass-card{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:16px 0 0;padding:16px 18px;border:1px dashed #f3b48a;border-radius:14px;background:#fff7f1}
+.pass-card.on{border:1px solid #cfe9d9;background:#f1faf4}
+.pass-card p{margin:4px 0 0;color:#555;font-size:14px}
+.pass-card .primary{flex-shrink:0}
+.mesomb-setup{margin:8px 0 20px}
+.mesomb-ok{margin:8px 0 16px}
+.visit-confirm{margin-top:8px}
+.visit-confirm .text-button{padding:0;color:var(--orange-text)}
+.reward-create{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin:8px 0}
+.reward-create label{display:flex;flex-direction:column;gap:4px;color:#555;font-size:13px;font-weight:700}
+.reward-create input{width:160px;padding:10px;border:1px solid #e3dcd5;border-radius:8px;font-size:15px}
+.reward-mini{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0;font-size:14px}
+.paylink{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;width:100%}
+.paylink input{flex:1 1 220px;min-width:0;padding:9px 10px;border:1px solid #e3dcd5;border-radius:8px;font-size:12px;color:#555}
+.paylink .secondary{padding:9px 12px;font-size:12px}
+.admin-actions.column{flex-direction:column;align-items:stretch;min-width:190px}
+.mini-select{padding:9px;border:1px solid #e3dcd5;border-radius:8px;background:#fff;font-size:13px}
+.referral-item{flex-wrap:wrap}
+.reward-line-item{flex-basis:100%;color:#2c6a43;font-size:12px}
+@media(max-width:580px){
+  .pay-networks{grid-template-columns:1fr}
+  .pay-amount{font-size:30px}
+  .pass-card{flex-direction:column;align-items:flex-start}
+  .pass-card .primary{width:100%}
+  .pass-pill{display:none}
+  .admin-actions.column{min-width:0;width:100%}
+}
+.modal .pass-price{color:var(--orange-text)}

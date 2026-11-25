@@ -219,6 +219,25 @@ export default function Admin({ member, authReady, access, onPublished }) {
               <p>{item.neighbourhood}, {item.city} · {priceLine(item)}</p>
               <span className={`status-pill ${item.available === false ? 'taken' : 'live'}`}>{item.available === false ? 'Taken' : 'Available'}</span>
               <PinEditor item={item} member={member} onSaved={async (text) => { setMessage(text); await load(); await onPublished?.() }} onError={setError} />
+              <label className="category-edit">Kind of home (decides the pass price)
+                <select value={item.category || 'room'} disabled={busy === `cat-${item.id}`} onChange={async (event) => {
+                  const category = event.target.value
+                  setBusy(`cat-${item.id}`)
+                  setError('')
+                  try {
+                    const response = await fetch(`/api/admin/listings/${encodeURIComponent(item.id)}/category`, { method: 'POST', headers: authHeadersFor(member), body: JSON.stringify({ category }) })
+                    const payload = await response.json().catch(() => ({}))
+                    if (!response.ok) throw new Error(payload.error || 'The category could not be saved.')
+                    setMessage(`"${item.title}" is now listed as ${category === 'room' ? 'a room' : category === 'studio' ? 'a studio' : 'an apartment'}.`)
+                    await load()
+                    await onPublished?.()
+                  } catch (categoryError) { setError(categoryError.message) } finally { setBusy('') }
+                }}>
+                  <option value="room">Room / self-contained (Rooms pass)</option>
+                  <option value="studio">Studio (Studio pass)</option>
+                  <option value="apartment">Apartment / house (Apartment pass)</option>
+                </select>
+              </label>
               {!item.sample ? <VisitConfirm item={item} member={member} onDone={(text) => { setMessage(text); setRefreshKey((n) => n + 1) }} onError={setError} /> : null}
             </div>
             <div className="admin-actions">

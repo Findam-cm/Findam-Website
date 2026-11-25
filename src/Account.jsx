@@ -12,6 +12,8 @@ function initialMode() {
   return 'signup'
 }
 
+const TIER_NAMES = { room: 'Rooms pass', studio: 'Studio pass', apartment: 'Apartment pass' }
+
 const TITLES = {
   signup: ['Create your Findam account', 'Free to join. Save homes, get alerts when new homes match your search, list a property, refer landlords, and unlock the contact and location of the homes you like with an access pass.'],
   signin: ['Welcome back', 'Sign in to see your saved homes, alerts, listings and referrals.'],
@@ -157,13 +159,13 @@ export default function Account({ member, onMember, referralCount, savedCount, a
       const unlockedHomes = (active?.homes || []).map((id) => (listings || []).find((item) => String(item.id) === id)).filter(Boolean)
       return <div className={`pass-card${active ? ' on' : ''}`}>
         <div>
-          <b>{active ? `🔓 Access pass active · ${passLeft} left` : '🔒 Contacts and locations are locked'}</b>
+          <b>{active ? `🔓 ${TIER_NAMES[active.tier] || 'Access pass'} active · ${passLeft} left` : '🔒 Contacts and locations are locked'}</b>
           <p>{active
-            ? `${active.slotsLeft} of ${active.maxHomes} ${active.maxHomes === 1 ? 'home' : 'homes'} left to unlock. Open a home and press “Unlock this home”.`
-            : `A pass unlocks the landlord’s phone number and exact location of ${passInfo?.homes || 4} homes you choose, for ${passInfo?.hours || 48} hours.`}</p>
+            ? `${active.slotsLeft} of ${active.maxHomes} ${active.maxHomes === 1 ? 'home' : 'homes'} left to unlock. Open a home and press “Unlock this home”. Your unlocked homes are listed below.`
+            : `A pass unlocks the landlord’s phone number and exact location of ${passInfo?.homes || 4} homes you choose, for ${passInfo?.hours || 48} hours: ${formatFcfa(passInfo?.fees?.room || 10000)} for rooms, ${formatFcfa(passInfo?.fees?.studio || 15000)} including studios, ${formatFcfa(passInfo?.fees?.apartment || 20000)} including apartments.`}</p>
           {unlockedHomes.length ? <ul className="unlocked-homes">{unlockedHomes.map((item) => <li key={item.id}><a href={`/homes/${encodeURIComponent(item.id)}`} onClick={(event) => { event.preventDefault(); onOpenListing?.(item) }}>{item.title}</a> · {item.neighbourhood}, {item.city}</li>)}</ul> : null}
         </div>
-        {active && active.slotsLeft > 0 ? null : <button className="primary" onClick={onUnlock}>{active ? 'Get a new pass' : 'Get a pass'} · {formatFcfa(passInfo?.fee || 10000)}</button>}
+        {active && active.slotsLeft > 0 ? null : <button className="primary" onClick={() => onUnlock({})}>{active ? 'Get a new pass' : 'Get a pass'} · from {formatFcfa(passInfo?.fees?.room || passInfo?.fee || 10000)}</button>}
       </div>
     })()}
     <div className="stat-grid">

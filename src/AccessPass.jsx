@@ -36,7 +36,19 @@ export function useClock(expiresAt, onExpire) {
   return now
 }
 
-export function PassModal({ member, settings, onClose, onActive }) {
+const TIERS = [
+  { id: 'room', name: 'Rooms pass', covers: 'Rooms and self-contained units' },
+  { id: 'studio', name: 'Studio pass', covers: 'Studios, rooms and self-contained units' },
+  { id: 'apartment', name: 'Apartment pass', covers: 'Apartments, houses and everything smaller' },
+]
+const RANK = { room: 1, studio: 2, apartment: 3 }
+
+// mode 'buy': choose a level (levels below `minTier` are hidden). mode 'upgrade': pay the difference to raise a pass.
+export function PassModal({ member, settings, onClose, onActive, minTier = 'room', mode = 'buy', upgradeFrom }) {
+  const fees = settings?.fees || { room: settings?.fee || 10000, studio: 15000, apartment: 20000 }
+  const options = TIERS.filter((tier) => RANK[tier.id] >= RANK[minTier] && (mode !== 'upgrade' || RANK[tier.id] > RANK[upgradeFrom || 'room']))
+  const [tier, setTier] = useState(options[0]?.id || 'room')
+  const price = mode === 'upgrade' ? Math.max(0, fees[tier] - fees[upgradeFrom || 'room']) : fees[tier]
   const [service, setService] = useState('')
   const [phone, setPhone] = useState('')
   const [busy, setBusy] = useState(false)
@@ -57,7 +69,7 @@ export function PassModal({ member, settings, onClose, onActive }) {
       try {
         const response = await fetch('/api/pass', { headers: authHeadersFor(member) })
         const data = await response.json()
-        if (data.active) { onActive(data); return }
+        if (data.active?.slotsFor?.[tier] > 0) { onActive(data); return }
         if (!data.pending) {
           setWaiting(false)
           setError(data.lastFailed?.error ? `The payment did not go through: ${data.lastFailed.error}` : 'The payment did not go through. You can try again.')
@@ -75,11 +87,11 @@ export function PassModal({ member, settings, onClose, onActive }) {
     setBusy(true)
     setError('')
     try {
-      const response = await fetch('/api/pass', { method: 'POST', headers: authHeadersFor(member), body: JSON.stringify({ service, phone }) })
+      const response = await fetch('/api/pass', { method: 'POST', headers: authHeadersFor(member), body: JSON.stringify({ service, phone, tier, upgrade: mode === 'upgrade' }) })
       const data = await response.json().catch(() => ({}))
       if (response.status === 409 && data.pass?.status === 'pending') { setWaiting(true); return }
       if (!response.ok) throw new Error(data.error || 'The payment could not be started.')
-      if (data.pass?.status === 'active') { onActive({ ...settings, active: data.active || null }); return }
+      if (data.pass?.status === 'active' || data.pass?.status === 'applied') { onActive({ ...settings, active: data.active || null }); return }
       if (data.pass?.status === 'failed') throw new Error(`The payment did not go through: ${data.pass.error || 'it was not approved.'}`)
       setWaited(0)
       setWaiting(true)
@@ -96,12 +108,21 @@ export function PassModal({ member, settings, onClose, onActive }) {
     <div className="modal pass-modal" role="dialog" aria-modal="true" aria-labelledby="pass-title" onClick={(event) => event.stopPropagation()}>
       <button type="button" className="modal-x" onClick={onClose} aria-label="Close" disabled={busy}>×</button>
       <div className="modal-icon lock" aria-hidden="true">🔓</div>
-      <h2 id="pass-title">Unlock {homes} homes for {hours} hours</h2>
-      <p>Choose up to <b>{homes} homes</b> you like best and see each landlord’s phone number and the exact location of the house. After {hours} hours, all of them lock again.</p>
-      <p className="pass-price">{formatFcfa(settings?.fee || 0)} <span>{homes} homes · {hours} hours</span></p>
+      <h2 id="pass-title">{mode === 'upgrade' ? 'Upgrade your pass' : `Unlock ${homes} homes for ${hours} hours`}</h2>
+      <p>{mode === 'upgrade'
+        ? <>Pay only the difference to raise your pass. The homes you already unlocked stay unlocked, and your pass keeps the same end time.</>
+        : <>Choose up to <b>{homes} homes</b> you like best and see each landlord’s phone number and the exact location of the house. After {hours} hours, all of them lock again.</>}</p>
+      <div className="tier-options" role="radiogroup" aria-label="Pass level">
+        {options.map((item) => <label key={item.id} className={`tier${tier === item.id ? ' selected' : ''}`}>
+          <input type="radio" name="pass-tier" value={item.id} checked={tier === item.id} onChange={() => setTier(item.id)} />
+          <span className="tier-name">{item.name}</span>
+          <span className="tier-price">{formatFcfa(mode === 'upgrade' ? Math.max(0, fees[item.id] - fees[upgradeFrom || 'room']) : fees[item.id])}{mode === 'upgrade' ? ' more' : ''}</span>
+          <span className="tier-covers">{item.covers}{mode === 'upgrade' ? '' : ` · ${homes} homes · ${hours} h`}</span>
+        </label>)}
+      </div>
       {!settings?.configured ? <p className="form-message warn">Mobile Money payments are being switched on. Please try again a little later.</p> : waiting ? <div className="pay-wait compact" role="status" aria-live="polite">
         <span className="spinner" aria-hidden="true" />
-        <div><b>Approve the payment on your phone</b><p>Enter your Mobile Money PIN to confirm {formatFcfa(settings?.fee || 0)}. This window updates by itself.</p>
+        <div><b>Approve the payment on your phone</b><p>Enter your Mobile Money PIN to confirm {formatFcfa(price)}. This window updates by itself.</p>
           {waited >= 45 ? <p className="muted">No prompt? Open your Mobile Money menu (MTN: *126#, Orange: #150#) and approve the pending payment.</p> : null}</div>
       </div> : <form className="pay-form" onSubmit={pay}>
         <fieldset className="pay-networks">
@@ -115,7 +136,7 @@ export function PassModal({ member, settings, onClose, onActive }) {
           <input type="tel" inputMode="tel" required value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="6XX XXX XXX" autoFocus />
         </label>
         {error ? <p className="form-message warn" role="alert">{error}</p> : null}
-        <button className="primary block" disabled={busy}>{busy ? 'Sending the request to your phone…' : `Pay ${formatFcfa(settings?.fee || 0)}`}</button>
+        <button className="primary block" disabled={busy}>{busy ? 'Sending the request to your phone…' : `Pay ${formatFcfa(price)}`}</button>
         <p className="pay-secure">Payments are processed by MeSomb. Findam never sees your PIN. After paying, open a home and press “Unlock this home”.</p>
       </form>}
       {error && waiting ? <p className="form-message warn" role="alert">{error}</p> : null}

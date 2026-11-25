@@ -26,10 +26,16 @@ const TOPICS = [
     reply: (c) => `A pass lasts ${c.hours} hours from the moment your payment is approved, and lets you unlock up to ${c.homes} homes. The time left shows at the top of the page and in your account. When it ends, all the homes you unlocked lock again; buy a new pass to unlock homes again.`,
   },
   {
+    id: 'unlocked_list',
+    strong: [/(where|see|find|view).*(unlocked|selected|chosen|picked) (homes?|houses?)/, /(unlocked|selected|chosen) (homes?|houses?).*(go|where|see|find)/, /my unlocked/],
+    words: [],
+    reply: () => 'The homes you unlock are listed on your Account page, under your access pass, with a link back to each one. They also show an “Unlocked” badge in search results, and the pass box at the top of the page opens that list.',
+  },
+  {
     id: 'pass',
-    strong: [/access pass/, /\bpass\b/, /\bunlock/, /subscri/, /abonnement/, /d[ée]bloqu/, /(24|48) ?h(ours?)?\b/, /\block(ed)?\b/, /how many (homes|houses)/, /\b(4|four) (homes|houses)/, /(open|unlock) (more|another|other) (homes?|houses?)/, /(how much|cost|price|pay).*(contact|number|unlock|location|landlord)/, /(contact|number|location).*(cost|pay|price|how much)/, /cost to (see|get|unlock|call)/],
+    strong: [/access pass/, /\bpass\b/, /\bunlock/, /subscri/, /abonnement/, /d[ée]bloqu/, /(24|48) ?h(ours?)?\b/, /\block(ed)?\b/, /how many (homes|houses)/, /\b(4|four) (homes|houses)/, /(open|unlock) (more|another|other) (homes?|houses?)/, /\bupgrad/, /(rooms?|studio|apartment) pass/, /(studio|apartment).*(price|cost|how much|pay)/, /(how much|cost|price|pay).*(contact|number|unlock|location|landlord)/, /(contact|number|location).*(cost|pay|price|how much)/, /cost to (see|get|unlock|call)/],
     words: [/\bfee\b/],
-    reply: (c) => `An access pass costs ${n.format(c.fee)} FCFA. It lets you choose up to ${c.homes} homes you like best and see each landlord’s phone number and the exact location of the house for ${c.hours} hours. Buy it from any listing with MTN Mobile Money or Orange Money, then open each home you want and press “Unlock this home”. After ${c.hours} hours, all of them lock again.`,
+    reply: (c) => `An access pass lets you choose up to ${c.homes} homes you like best and see each landlord’s phone number and the exact location for ${c.hours} hours. It costs ${n.format(c.fees.room)} FCFA for rooms and self-contained units, ${n.format(c.fees.studio)} FCFA if your homes include a studio, and ${n.format(c.fees.apartment)} FCFA if they include an apartment or house. Pay with MTN Mobile Money or Orange Money, then open each home and press “Unlock this home”. You can upgrade later by paying only the difference. After ${c.hours} hours, all of them lock again.`,
   },
   {
     id: 'payment_problem',
@@ -47,7 +53,7 @@ const TOPICS = [
     id: 'contact',
     strong: [/contact/, /phone number/, /landlord.?s? (number|phone)/, /call (the )?(landlord|owner|agent)/, /num[ée]ro/, /reach the (landlord|owner)/],
     words: [/\bagent\b/, /\bowner\b/, /whatsapp/],
-    reply: (c) => `A landlord’s phone number appears on the listing once you unlock that home with an access pass (${n.format(c.fee)} FCFA for ${c.homes} homes of your choice, ${c.hours} hours). Sign in, open the home, press “Unlock this home”, and the number appears with a “Call now” button.`,
+    reply: (c) => `A landlord’s phone number appears on the listing once you unlock that home with an access pass (${c.homes} homes of your choice for ${c.hours} hours: from ${n.format(c.fees.room)} FCFA for rooms, ${n.format(c.fees.studio)} FCFA with studios, ${n.format(c.fees.apartment)} FCFA with apartments). Sign in, open the home, press “Unlock this home”, and the number appears with a “Call now” button. Your unlocked homes are listed on your Account page.`,
   },
   {
     id: 'visit',
@@ -148,7 +154,9 @@ const TOPICS = [
 const FALLBACK = 'I can help with finding a home, prices, the access pass, payments with MTN or Orange Money, exact locations, listing a property, alerts and the referral programme. Could you ask in a few more words?'
 
 export function answer(question, context = {}) {
-  const c = { fee: context.fee || 10000, hours: context.hours || 48, homes: context.homes || 4 }
+  const fees = { room: 10000, studio: 15000, apartment: 20000, ...(context.fees || {}) }
+  if (context.fee && !context.fees) fees.room = context.fee
+  const c = { fee: fees.room, fees, hours: context.hours || 48, homes: context.homes || 4 }
   const q = String(question || '').toLowerCase().normalize('NFC').replace(/\s+/g, ' ').trim()
   if (!q) return { id: 'empty', text: FALLBACK }
   let best = null

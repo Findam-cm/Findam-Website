@@ -1,4 +1,7 @@
-import { useEffect } from 'react'
+import { createContext, useContext, useEffect } from 'react'
+
+// Ids of the homes the member has unlocked with their access pass (shown as a badge on cards).
+export const UnlockedContext = createContext(new Set())
 import { FullPhoto } from './Gallery.jsx'
 
 // Listing photo shown whole (never cropped), with the house icon if the image cannot load.
@@ -50,6 +53,7 @@ export function statusBadge(listing) {
 }
 
 export function ListingCard({ listing, onOpen, saved, onSave }) {
+  const unlocked = useContext(UnlockedContext).has(String(listing.id))
   const badge = statusBadge(listing)
   const taken = !isAvailable(listing)
   return <article className={`listing-card${taken ? ' is-taken' : ''}`}>
@@ -60,6 +64,7 @@ export function ListingCard({ listing, onOpen, saved, onSave }) {
     }}>
       <div className="listing-image" style={{ '--hue': listing.hue }}>
         <span className={`badge ${badge.tone}`}>{badge.text}</span>
+        {unlocked ? <span className="badge unlocked-badge">🔓 Unlocked</span> : null}
         <Photo src={listing.thumbs?.[0] || listing.photos?.[0]} />
       </div>
       <div className="listing-copy">

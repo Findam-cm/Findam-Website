@@ -108,6 +108,9 @@ async function ensureTables(sql, databaseUrl) {
   `
   await sql`CREATE INDEX IF NOT EXISTS access_passes_user ON access_passes (user_id, expires_at DESC)`
   await sql`ALTER TABLE access_passes ADD COLUMN IF NOT EXISTS max_homes int NOT NULL DEFAULT 4`
+  await sql`ALTER TABLE access_passes ADD COLUMN IF NOT EXISTS tier text NOT NULL DEFAULT 'room'`
+  await sql`ALTER TABLE access_passes ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'pass'`
+  await sql`ALTER TABLE access_passes ADD COLUMN IF NOT EXISTS upgrades uuid`
   await sql`
     CREATE TABLE IF NOT EXISTS pass_unlocks (
       pass_id uuid NOT NULL REFERENCES access_passes (id),
@@ -219,24 +222,26 @@ export async function memberAccount(databaseUrl, userId) {
 }
 
 // ---- Access passes: a paid pass unlocks contacts and exact locations for a limited time ----
-const PASS_COLUMNS = 'id, user_id, user_email, amount, hours, max_homes, status, trx, service, payer_phone, last_error, created_at, paid_at, expires_at'
+const PASS_COLUMNS = 'id, user_id, user_email, amount, hours, max_homes, tier, kind, upgrades, status, trx, service, payer_phone, last_error, created_at, paid_at, expires_at'
+const TIER_RANK = "CASE a.tier WHEN 'apartment' THEN 3 WHEN 'studio' THEN 2 ELSE 1 END"
 
 // Active passes with the homes each one has unlocked (a member may hold more than one).
 export async function activePassesWithHomes(databaseUrl, userId) {
   const sql = client(databaseUrl)
   await ensureTables(sql, databaseUrl)
   return sql`
-    SELECT a.id, a.amount, a.hours, a.max_homes, a.expires_at, a.paid_at,
+    SELECT a.id, a.amount, a.hours, a.max_homes, a.tier, a.expires_at, a.paid_at,
       coalesce((SELECT array_agg(u.listing_id ORDER BY u.created_at) FROM pass_unlocks u WHERE u.pass_id = a.id), '{}') AS homes
     FROM access_passes a
-    WHERE a.user_id = ${userId} AND a.status = 'active' AND a.expires_at > now()
+    WHERE a.user_id = ${userId} AND a.kind = 'pass' AND a.status = 'active' AND a.expires_at > now()
     ORDER BY a.expires_at ASC
   `
 }
 
-// Unlocks one home with a free slot on the member's active pass (soonest-expiring first).
+// Unlocks one home on an active pass that has a free slot AND a high enough level for the home's
+// category (rank 1 room, 2 studio, 3 apartment). Uses the lowest suitable level, soonest-expiring first.
 // Serialised per member with an advisory lock so two quick taps can never exceed the limit.
-export async function unlockHome(databaseUrl, userId, listingId) {
+export async function unlockHome(databaseUrl, userId, listingId, needRank = 1) {
   const sql = client(databaseUrl)
   await ensureTables(sql, databaseUrl)
   const id = String(listingId)
@@ -246,18 +251,37 @@ export async function unlockHome(databaseUrl, userId, listingId) {
       INSERT INTO pass_unlocks (pass_id, user_id, listing_id)
       SELECT a.id, ${userId}, ${id}
       FROM access_passes a
-      WHERE a.user_id = ${userId} AND a.status = 'active' AND a.expires_at > now()
+      WHERE a.user_id = ${userId} AND a.kind = 'pass' AND a.status = 'active' AND a.expires_at > now()
+        AND ${sql.unsafe(TIER_RANK)} >= ${Number(needRank)}
         AND NOT EXISTS (
           SELECT 1 FROM pass_unlocks u JOIN access_passes b ON b.id = u.pass_id
           WHERE u.user_id = ${userId} AND u.listing_id = ${id} AND b.status = 'active' AND b.expires_at > now()
         )
         AND (SELECT count(*) FROM pass_unlocks u WHERE u.pass_id = a.id) < a.max_homes
-      ORDER BY a.expires_at ASC
+      ORDER BY ${sql.unsafe(TIER_RANK)} ASC, a.expires_at ASC
       LIMIT 1
       RETURNING pass_id
     `,
   ])
   return results[1][0]?.pass_id || null
+}
+
+// An upgrade payment that succeeded raises the level of the pass it belongs to. Guarded: applied once.
+export async function applyUpgrade(databaseUrl, upgradeId) {
+  const sql = client(databaseUrl)
+  await ensureTables(sql, databaseUrl)
+  const rows = await sql`
+    WITH u AS (
+      UPDATE access_passes SET status = 'applied', paid_at = now(), last_error = NULL
+      WHERE id = ${String(upgradeId)} AND kind = 'upgrade' AND status = 'pending'
+      RETURNING upgrades, tier
+    )
+    UPDATE access_passes p SET tier = u.tier FROM u
+    WHERE p.id = u.upgrades
+      AND (CASE u.tier WHEN 'apartment' THEN 3 WHEN 'studio' THEN 2 ELSE 1 END) > (CASE p.tier WHEN 'apartment' THEN 3 WHEN 'studio' THEN 2 ELSE 1 END)
+    RETURNING p.id, p.tier
+  `
+  return rows[0] || null
 }
 
 export async function activePass(databaseUrl, userId) {
@@ -282,8 +306,8 @@ export async function createPass(databaseUrl, input) {
   const sql = client(databaseUrl)
   await ensureTables(sql, databaseUrl)
   const rows = await sql`
-    INSERT INTO access_passes (user_id, user_email, amount, hours, max_homes, trx, service, payer_phone)
-    VALUES (${input.userId}, ${input.email}, ${input.amount}, ${input.hours}, ${input.maxHomes}, ${input.trx}, ${input.service}, ${input.phone})
+    INSERT INTO access_passes (user_id, user_email, amount, hours, max_homes, tier, kind, upgrades, trx, service, payer_phone)
+    VALUES (${input.userId}, ${input.email}, ${input.amount}, ${input.hours}, ${input.maxHomes}, ${input.tier || 'room'}, ${input.kind || 'pass'}, ${input.upgrades || null}, ${input.trx}, ${input.service}, ${input.phone})
     RETURNING ${sql.unsafe(PASS_COLUMNS)}
   `
   return rows[0]
@@ -296,7 +320,7 @@ export async function settlePass(databaseUrl, id, outcome, message) {
   const rows = outcome === 'active'
     ? await sql`
         UPDATE access_passes SET status = 'active', paid_at = now(), expires_at = now() + make_interval(hours => hours), last_error = NULL
-        WHERE id = ${String(id)} AND status = 'pending'
+        WHERE id = ${String(id)} AND status = 'pending' AND kind = 'pass'
         RETURNING ${sql.unsafe(PASS_COLUMNS)}`
     : outcome === 'failed'
       ? await sql`

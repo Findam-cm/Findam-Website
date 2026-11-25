@@ -617,3 +617,23 @@ nav a.active,nav a:hover,.text-button:hover,a.text-button:hover,.type-tabs butto
   .admin-actions.column{min-width:0;width:100%}
 }
 .modal .pass-price{color:var(--orange-text)}
+
+/* ===== Pass levels (rooms / studio / apartment) ===== */
+.tier-options{display:grid;gap:8px;margin:12px 0 14px}
+.tier{position:relative;display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:12px 14px;border:2px solid var(--line);border-radius:12px;background:#fff;cursor:pointer}
+.tier input{position:absolute;opacity:0;width:1px;height:1px}
+.tier.selected{border-color:var(--orange);background:var(--pale)}
+.tier:focus-within{outline:2px solid var(--orange);outline-offset:2px}
+.tier-name{font-weight:700;font-size:15px}
+.tier-price{color:var(--orange-text);font-weight:700;font-size:15px;text-align:right}
+.tier-covers{grid-column:1/-1;color:#666;font-size:12px}
+.locked-card.upgrade{border-color:#9cc7ad;background:#f4fbf6}
+.unlocked-badge{left:auto;right:56px;background:#2f8f5b;color:#fff}
+.fact-category{border-color:#ffc7a3!important;background:#fff5ed;color:var(--orange-text)!important;font-weight:700}
+.pass-level-note{margin:8px 0 0;color:#777;font-size:12px}
+.category-edit{display:flex;flex-direction:column;gap:4px;margin-top:8px;color:#555;font-size:12px;font-weight:700}
+.category-edit select{max-width:320px;padding:8px;border:1px solid #e3dcd5;border-radius:8px;font-size:13px}
+a.pass-pill{text-decoration:none}
+a.pass-pill:hover{background:#dff1e6}
+.unlocked-homes{margin:10px 0 0;padding-left:18px;font-size:14px;line-height:1.7}
+.unlocked-homes a{color:var(--orange-text);font-weight:700}

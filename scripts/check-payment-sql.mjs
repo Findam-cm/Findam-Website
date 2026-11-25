@@ -48,6 +48,28 @@ try {
   await step('5th home is refused (limit 4)', unlock, ['qa-user', 'h5'], (rows) => rows.length === 0)
   await step('unlocking the same home again uses no slot', unlock, ['qa-user', 'h2'], (rows) => rows.length === 0)
   await step('summary query lists 4 homes', `SELECT a.max_homes, coalesce((SELECT array_agg(u.listing_id ORDER BY u.created_at) FROM pass_unlocks u WHERE u.pass_id = a.id), '{}') AS homes FROM access_passes a WHERE a.user_id = $1 AND a.status = 'active' AND a.expires_at > now() ORDER BY a.expires_at ASC`, ['qa-user'], (rows) => rows[0]?.homes?.length === 4 && rows[0]?.max_homes === 4)
+  // Pass levels: rooms (1) < studio (2) < apartment (3).
+  await step('add tier/kind/upgrades columns', "ALTER TABLE access_passes ADD COLUMN IF NOT EXISTS tier text NOT NULL DEFAULT 'room', ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'pass', ADD COLUMN IF NOT EXISTS upgrades uuid")
+  const rank = "CASE a.tier WHEN 'apartment' THEN 3 WHEN 'studio' THEN 2 ELSE 1 END"
+  const unlockRanked = `INSERT INTO pass_unlocks (pass_id, user_id, listing_id)
+      SELECT a.id, $1, $2 FROM access_passes a
+      WHERE a.user_id = $1 AND a.kind = 'pass' AND a.status = 'active' AND a.expires_at > now() AND ${rank} >= $3
+        AND NOT EXISTS (SELECT 1 FROM pass_unlocks u JOIN access_passes b ON b.id = u.pass_id WHERE u.user_id = $1 AND u.listing_id = $2 AND b.status = 'active' AND b.expires_at > now())
+        AND (SELECT count(*) FROM pass_unlocks u WHERE u.pass_id = a.id) < a.max_homes
+      ORDER BY ${rank} ASC, a.expires_at ASC LIMIT 1 RETURNING pass_id`
+  const p2 = await step('new rooms pass', "INSERT INTO access_passes (user_id, user_email, amount, hours, max_homes, tier, trx, service, payer_phone, status, paid_at, expires_at) VALUES ('qa-2','qa2@example.com',10000,48,4,'room','apqa2-'||extract(epoch from now()),'MTN','677000000','active',now(),now()+interval '48 hours') RETURNING id", [], (rows) => rows.length === 1)
+  await step('rooms pass unlocks a room', unlockRanked, ['qa-2', 'room-1', 1], (rows) => rows.length === 1)
+  await step('rooms pass cannot unlock an apartment', unlockRanked, ['qa-2', 'apt-1', 3], (rows) => rows.length === 0)
+  await step('rooms pass cannot unlock a studio', unlockRanked, ['qa-2', 'studio-1', 2], (rows) => rows.length === 0)
+  const up = await step('record upgrade payment', "INSERT INTO access_passes (user_id, user_email, amount, hours, max_homes, tier, kind, upgrades, trx, service, payer_phone) VALUES ('qa-2','qa2@example.com',10000,0,0,'apartment','upgrade',$1,'upqa2-'||extract(epoch from now()),'MTN','677000000') RETURNING id", [p2[0]?.id], (rows) => rows.length === 1)
+  const applyUpgrade = `WITH u AS (UPDATE access_passes SET status = 'applied', paid_at = now(), last_error = NULL WHERE id = $1 AND kind = 'upgrade' AND status = 'pending' RETURNING upgrades, tier)
+    UPDATE access_passes p SET tier = u.tier FROM u WHERE p.id = u.upgrades
+      AND (CASE u.tier WHEN 'apartment' THEN 3 WHEN 'studio' THEN 2 ELSE 1 END) > (CASE p.tier WHEN 'apartment' THEN 3 WHEN 'studio' THEN 2 ELSE 1 END)
+    RETURNING p.id, p.tier`
+  await step('upgrade applies: pass becomes apartment', applyUpgrade, [up[0]?.id], (rows) => rows[0]?.tier === 'apartment')
+  await step('upgrade cannot be applied twice', applyUpgrade, [up[0]?.id], (rows) => rows.length === 0)
+  await step('upgraded pass now unlocks the apartment', unlockRanked, ['qa-2', 'apt-1', 3], (rows) => rows.length === 1)
+  await step('upgrade row never counts as a pass', "SELECT count(*)::int AS n FROM access_passes a WHERE a.user_id = 'qa-2' AND a.kind = 'pass' AND a.status = 'active'", [], (rows) => rows[0].n === 1)
   await client.query("UPDATE access_passes SET expires_at = now() - interval '1 second' WHERE user_id = 'qa-user'")
   await step('after expiry nothing can be unlocked', unlock, ['qa-user', 'h6'], (rows) => rows.length === 0)
   await step('after expiry no active pass remains', "SELECT id FROM access_passes WHERE user_id = 'qa-user' AND status = 'active' AND expires_at > now()", [], (rows) => rows.length === 0)

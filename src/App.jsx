@@ -10,8 +10,9 @@ import Notifications from './Notifications.jsx'
 import PayReward from './PayReward.jsx'
 import { PassModal, timeLeft, useClock } from './AccessPass.jsx'
 import { answer } from './botBrain.js'
+import { CATEGORIES, listingCategory } from './category.js'
 import { authClient } from './auth.js'
-import { Link, ListingCard, Modal, PriceInput, statusBadge } from './ui.jsx'
+import { Link, ListingCard, Modal, PriceInput, UnlockedContext, statusBadge } from './ui.jsx'
 import { filtersFromSearch, filtersToSearch, homesLink, isAvailable, matchesFilters, sortListings } from './filters.js'
 import { PERIODS, budgetHint, budgetLabel, formatFcfa, priceLine } from './price.js'
 
@@ -176,6 +177,7 @@ function App() {
   useEffect(() => { if (authReady) loadPass() }, [authReady, member?.token, loadPass])
   const passClock = useClock(passInfo?.active?.expiresAt, () => { loadPass(); setToast({ text: 'Your access pass has ended. All homes are locked again.', long: true }) })
   const passLeft = timeLeft(passInfo?.active?.expiresAt, passClock)
+  const unlockedIds = useMemo(() => new Set(passLeft ? (passInfo?.active?.homes || []) : []), [passInfo?.active?.homes?.join('|'), Boolean(passLeft)])
 
   const loadAlerts = useCallback(async () => {
     if (!member?.token) return
@@ -338,30 +340,30 @@ function App() {
       </nav>
       <div className="nav-actions">
         {!member && authReady ? <Link to="/account" navigate={navigate} className="signup-pill">Sign up</Link> : null}
-        {member && passLeft && !passInfo?.admin ? <span className="pass-pill" title="Homes you can still unlock and time left on your pass">🔓 {passInfo.active.slotsLeft} left · {passLeft}</span> : null}
+        {member && passLeft && !passInfo?.admin ? <Link to="/account" navigate={navigate} className="pass-pill" title="See the homes you unlocked">🔓 {passInfo.active.slotsLeft} left · {passLeft}</Link> : null}
         {member ? <Link to="/notifications" navigate={navigate} className={`bell${page === 'alerts' ? ' active' : ''}`} aria-label={alertsData.unread ? `Notifications, ${alertsData.unread} new` : 'Notifications'}><BellIcon />{alertsData.unread ? <span className="bell-badge">{alertsData.unread > 9 ? '9+' : alertsData.unread}</span> : null}</Link> : null}
         <Link to="/list" navigate={navigate} className="primary compact">List a property</Link>
         <button className="menu" onClick={() => setMenuOpen(!menuOpen)} aria-expanded={menuOpen} aria-controls="site-nav" aria-label={menuOpen ? 'Close menu' : 'Open menu'}><MenuIcon open={menuOpen} /></button>
       </div>
     </div></header>
-    <main id="main">
+    <UnlockedContext.Provider value={unlockedIds}><main id="main">
       {page === 'home' && <Home listings={liveListings} filters={filters} update={updateFilters} search={() => go('listings')} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} navigate={navigate} />}
       {page === 'listings' && <Listings results={results} filters={filters} update={updateFilters} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} onAlert={createAlert} alertState={alertState} />}
-      {page === 'detail' && <Detail listing={selected} loaded={catalogLoaded} all={liveListings} back={backToListings} member={member} go={go} navigate={navigate} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} passInfo={passInfo} passLeft={passLeft} onUnlock={() => setPassModal(true)} onPassChange={(active) => setPassInfo((current) => ({ ...(current || {}), active }))} />}
+      {page === 'detail' && <Detail listing={selected} loaded={catalogLoaded} all={liveListings} back={backToListings} member={member} go={go} navigate={navigate} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} passInfo={passInfo} passLeft={passLeft} onUnlock={(options) => setPassModal(options || {})} onPassChange={(active) => setPassInfo((current) => ({ ...(current || {}), active }))} />}
       {page === 'agents' && <Agents navigate={navigate} />}
       {page === 'list' && <ListProperty member={member} go={go} onMember={setMember} isAdmin={adminAccess === 'admin'} />}
       {page === 'workflow' && <Workflow go={go} />}
       {page === 'saved' && <Saved listings={liveListings.filter((listing) => savedIds.includes(listing.id))} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} />}
-      {page === 'account' && <Account member={member} onMember={setMember} referralCount={referralCount} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} passInfo={passInfo} passLeft={passLeft} onUnlock={() => setPassModal(true)} listings={liveListings} onOpenListing={showListing} />}
+      {page === 'account' && <Account member={member} onMember={setMember} referralCount={referralCount} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} passInfo={passInfo} passLeft={passLeft} onUnlock={(options) => setPassModal(options || {})} listings={liveListings} onOpenListing={showListing} />}
       {page === 'refer' && <Refer member={member} go={go} />}
       {page === 'admin' && <Admin member={member} authReady={authReady} access={adminAccess} onPublished={refreshPublicListings} />}
       {page === 'notfound' && <section className="shell section narrow not-found"><p className="kicker">ERROR 404</p><h1 className="page-title">This page does not exist</h1><p className="lead">The link may be old or mistyped. Try one of these instead.</p><div className="empty-actions left"><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link><Link to="/" navigate={navigate} className="secondary">Go to the home page</Link></div></section>}
       {page === 'pay' && <PayReward navigate={navigate} />}
       {page === 'alerts' && <Notifications member={member} data={alertsData} onSeen={markSeen} onDelete={deleteAlert} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} navigate={navigate} go={go} />}
-    </main>
+    </main></UnlockedContext.Provider>
     <HelpBot go={go} navigate={navigate} passInfo={passInfo} />
     <Toast toast={toast} onClose={() => setToast(null)} />
-    {passModal && member ? <PassModal member={member} settings={passInfo} onClose={() => setPassModal(false)} onActive={(data) => {
+    {passModal && member ? <PassModal member={member} settings={passInfo} minTier={passModal.minTier} mode={passModal.mode} upgradeFrom={passModal.upgradeFrom} onClose={() => setPassModal(false)} onActive={(data) => {
       setPassModal(false)
       loadPass()
       if (data?.active) setPassInfo((current) => ({ ...(current || {}), ...data, pending: null }))
@@ -450,7 +452,13 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
   const active = passLeft ? passInfo?.active : null
   const homeUnlocked = Boolean(listing && active?.homes?.includes(String(listing.id)))
   const unlocked = Boolean(member && listing && (passInfo?.admin || listing.sample || homeUnlocked))
-  const slotsLeft = active?.slotsLeft || 0
+  const category = listing ? (listing.category || listingCategory(listing)) : 'room'
+  // Free slots on a pass whose level covers this home, and free slots that would need an upgrade.
+  const slotsLeft = active?.slotsFor ? (active.slotsFor[category] || 0) : (active?.slotsLeft || 0)
+  const anySlots = active?.slotsLeft || 0
+  const upgradeFrom = !slotsLeft && anySlots
+    ? (active.passes || []).filter((p) => p.free > 0).sort((a, b) => Date.parse(b.expiresAt) - Date.parse(a.expiresAt))[0]?.tier || 'room'
+    : null
   useEffect(() => { setShowMap(false) }, [listing?.id])
   // Contact and exact location come from the server only while the access pass is active.
   useEffect(() => {
@@ -474,8 +482,10 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
   const badge = statusBadge(listing)
   const similar = all.filter((item) => item.id !== listing.id && item.city === listing.city && isAvailable(item)).slice(0, 4)
   const photos = listing.photos || []
-  const unlock = () => { if (!member) go('account'); else onUnlock() }
-  const fee = formatFcfa(passInfo?.fee || 10000)
+  const unlock = () => { if (!member) go('account'); else if (upgradeFrom) onUnlock({ mode: 'upgrade', minTier: category, upgradeFrom }); else onUnlock({ minTier: category }) }
+  const fees = passInfo?.fees || { room: 10000, studio: 15000, apartment: 20000 }
+  const fee = formatFcfa(fees[category] || passInfo?.fee || 10000)
+  const categoryName = CATEGORIES[category]?.short || 'Room'
   const hours = passInfo?.hours || 48
   const homesPerPass = passInfo?.homes || 4
   const useSlot = async () => {
@@ -509,7 +519,7 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
       <p className="kicker">{listing.type} · {listing.neighbourhood}, {listing.city}</p>
       <h1 className="page-title">{listing.title}</h1>
       <p className="lead">{listing.description}</p>
-      <div className="facts">{listing.beds ? <span>{listing.beds} {listing.beds === 1 ? 'Bedroom' : 'Bedrooms'}</span> : null}{listing.baths ? <span>{listing.baths} {listing.baths === 1 ? 'Bathroom' : 'Bathrooms'}</span> : null}{listing.size ? <span>{listing.size} m²</span> : null}<span>{PERIODS[listing.period]?.long === 'sale price' ? 'For sale' : `Paid ${PERIODS[listing.period]?.long || ''}`}</span></div>
+      <div className="facts"><span className="fact-category">{categoryName}</span>{listing.beds ? <span>{listing.beds} {listing.beds === 1 ? 'Bedroom' : 'Bedrooms'}</span> : null}{listing.baths ? <span>{listing.baths} {listing.baths === 1 ? 'Bathroom' : 'Bathrooms'}</span> : null}{listing.size ? <span>{listing.size} m²</span> : null}<span>{PERIODS[listing.period]?.long === 'sale price' ? 'For sale' : `Paid ${PERIODS[listing.period]?.long || ''}`}</span></div>
       <div className={`location-block${unlocked ? '' : ' locked'}`}>
         <div><h2>{unlocked ? 'Location' : '🔒 Location'}</h2><p>{!unlocked
           ? <>{listing.neighbourhood}, {listing.city}. {listing.exact ? 'The exact position of the house and directions to it unlock' : 'The map unlocks'} {slotsLeft ? 'when you unlock this home.' : 'with an access pass.'}</>
@@ -517,7 +527,7 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
             : <>{listing.neighbourhood}, {listing.city}. The map shows the neighbourhood; the house finder will guide you to the door.</>}</p></div>
         {unlocked
           ? <button type="button" className="secondary" aria-expanded={showMap} onClick={() => setShowMap(!showMap)} disabled={listing.exact && !details}>{showMap ? 'Hide map' : 'See location'}</button>
-          : <button type="button" className="primary" onClick={slotsLeft ? useSlot : unlock} disabled={unlocking}>{!member ? 'Sign in to unlock' : slotsLeft ? 'Unlock this home' : 'Unlock location'}</button>}
+          : <button type="button" className="primary" onClick={slotsLeft ? useSlot : unlock} disabled={unlocking}>{!member ? 'Sign in to unlock' : slotsLeft ? 'Unlock this home' : upgradeFrom ? 'Upgrade pass' : 'Unlock location'}</button>}
       </div>
       {unlocked && showMap ? (listing.exact && details?.exact
         ? <Suspense fallback={<p className="muted" role="status">Loading the map…</p>}><ExactMap lat={details.lat} lng={details.lng} title={listing.title} /></Suspense>
@@ -537,16 +547,22 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
         </div>
         : slotsLeft ? <div className="locked-card ready">
           <b>🔓 You can unlock this home</b>
-          <p>You have <b>{slotsLeft} of {active.maxHomes}</b> {active.maxHomes === 1 ? 'home' : 'homes'} left on your pass. Unlocking shows the landlord’s phone number and the exact location until your pass ends ({passLeft} left).</p>
+          <p>You have <b>{anySlots} of {active.maxHomes}</b> {active.maxHomes === 1 ? 'home' : 'homes'} left on your pass. Unlocking shows the landlord’s phone number and the exact location until your pass ends ({passLeft} left).</p>
           <button className="primary" onClick={useSlot} disabled={unlocking}>{unlocking ? 'Unlocking…' : 'Unlock this home'}</button>
           {detailsError ? <p className="form-message warn">{detailsError}</p> : null}
         </div>
+        : upgradeFrom ? <div className="locked-card upgrade">
+          <b>⬆ This home is {category === 'apartment' ? 'an apartment' : 'a studio'}</b>
+          <p>Your {CATEGORIES[upgradeFrom]?.pass || 'pass'} does not cover {category === 'apartment' ? 'apartments' : 'studios'}. Upgrade it for <b>{formatFcfa(Math.max(0, (fees[category] || 0) - (fees[upgradeFrom] || 0)))} more</b>, and you keep your {anySlots} remaining {anySlots === 1 ? 'home' : 'homes'} and end time.</p>
+          <button className="primary" onClick={unlock}>Upgrade to the {CATEGORIES[category]?.pass}</button>
+        </div>
         : <div className="locked-card">
           <b>🔒 Contact and exact location are locked</b>
-          <p>{active ? `You have used all ${active.maxHomes} homes on your pass.` : `Choose up to ${homesPerPass} homes you like best and see each landlord’s phone number and the exact location for ${hours} hours.`}</p>
-          <button className="primary" onClick={unlock}>{!member ? 'Sign in to unlock' : active ? `Get a new pass · ${fee}` : `Get a pass · ${fee}`}</button>
+          <p>{active ? `You have used all ${active.maxHomes} homes on your pass.` : `This is ${category === 'apartment' ? 'an apartment' : category === 'studio' ? 'a studio' : 'a room'}. The ${CATEGORIES[category]?.pass} lets you choose up to ${homesPerPass} homes and see each landlord’s phone number and exact location for ${hours} hours.`}</p>
+          <button className="primary" onClick={unlock}>{!member ? 'Sign in to unlock' : active ? `Get a new pass · from ${fee}` : `Get the ${CATEGORIES[category]?.pass} · ${fee}`}</button>
           <small>{member ? `${homesPerPass} homes · ${hours} hours · MTN or Orange Money` : 'Creating an account is free and takes under a minute.'}</small>
         </div>}
+      {!unlocked && !listing.sample ? <p className="pass-level-note">{categoryName} · unlocks with the {CATEGORIES[category]?.pass} or higher</p> : null}
       {listing.sample ? <div className="verified">Sample listing. A house finder has not inspected this home.</div> : <div className="verified">Accepted by an admin and visible to house seekers.</div>}
     </aside></div>
     {similar.length ? <section className="similar"><div className="section-head"><h2>More homes in {listing.city}</h2><Link to={homesLink({ city: listing.city })} navigate={navigate} className="text-button">See all in {listing.city} →</Link></div><div className="cards">{similar.map((item) => <ListingCard key={item.id} listing={item} onOpen={onOpen} saved={savedIds.includes(item.id)} onSave={onSave} />)}</div></section> : null}
@@ -632,6 +648,7 @@ function ListProperty({ member, go, onMember, isAdmin }) {
       <label>Neighbourhood<input name="neighbourhood" required maxLength="80" placeholder="e.g. Molyko" /></label>
       <label>Property type<select name="type" value={type} onChange={(event) => setType(event.target.value)}><option>Rent</option><option>Sale</option><option>Guest house</option></select></label>
       {type === 'Rent' ? <label>Rent is paid<select value={period} onChange={(event) => setPeriod(event.target.value)}><option value="month">Every month</option><option value="year">Every year</option></select></label> : <span className="form-spacer" />}
+      <label className="span-2">Kind of home<select name="category" required defaultValue=""><option value="" disabled>Choose…</option><option value="room">Room / self-contained</option><option value="studio">Studio</option><option value="apartment">Apartment, flat, house or duplex</option></select><small>House seekers use this to know what they are unlocking.</small></label>
       <label className="span-2">{priceLabel}
         <PriceInput required value={price} onChange={setPrice} placeholder={type === 'Sale' ? 'e.g. 25,000,000' : type === 'Guest house' ? 'e.g. 25,000' : period === 'year' ? 'e.g. 1,200,000' : 'e.g. 150,000'} />
         <small>Type the full amount, not thousands. {price ? <b>Shown to house seekers as {priceLine({ price, period: type === 'Sale' ? 'sale' : type === 'Guest house' ? 'night' : period })}</b> : 'For 150,000 FCFA, type 150000.'}</small>
@@ -665,7 +682,7 @@ function HelpBot({ go, navigate, passInfo }) {
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [messages, setMessages] = useState([{ from: 'bot', text: 'Hi! I am Findam Bot. Ask me about homes, prices, the access pass, paying with MTN or Orange Money, listing a property or the referral programme.' }])
-  const botReply = (text) => answer(text, { fee: passInfo?.fee, hours: passInfo?.hours, homes: passInfo?.homes }).text
+  const botReply = (text) => answer(text, { fee: passInfo?.fee, fees: passInfo?.fees, hours: passInfo?.hours, homes: passInfo?.homes }).text
   const sendMessage = (event) => { event.preventDefault(); const text = message.trim(); if (!text) return; setMessages((current) => [...current, { from: 'user', text }, { from: 'bot', text: botReply(text) }]); setMessage('') }
   const quickReply = (text) => setMessages((current) => [...current, { from: 'user', text }, { from: 'bot', text: botReply(text) }])
   return <div className="bot-widget">

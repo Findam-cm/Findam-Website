@@ -3,7 +3,8 @@ import { latestPass, unlockHome } from './db.js'
 import { addAlert, addReferral, checkPostgres, createReward, deleteAlert, findAcceptedReferralByPhone, getReferral, getReward, listAlerts, listPendingReferrals, listRewards, markAlertsSeen, memberAccount, reviewReferral, rewardsForListing, transitionReward } from './db.js'
 import { applicationStatus, mesombConfigured } from './mesomb.js'
 import { landlordView, refreshReward, startCollect, startPayout } from './rewards.js'
-import { buyPass, passSettings, passSummary, passView, refreshPass } from './passes.js'
+import { buyPass, passSettings, passSummary, passView, refreshPass, upgradePass } from './passes.js'
+import { CATEGORIES, listingCategory } from '../src/category.js'
 import { allowedOrigins, isAdmin, requireUser } from './session.js'
 import { EMPTY_FILTERS, describeFilters, matchesFilters } from '../src/filters.js'
 
@@ -45,6 +46,7 @@ function publicListing(listing) {
   const { phone, submittedBy, submittedEmail, visitConfirmedBy, ...visible } = listing
   if (SAMPLE_IDS.has(String(listing.id))) visible.sample = true
   visible.available = listing.available !== false
+  visible.category = listingCategory(listing)
   // The exact house position is part of the locked details (access pass); the public data only
   // says that an exact pin exists.
   if (listing.exact) {
@@ -184,6 +186,7 @@ async function createListing(request, bucket, user, env, formData) {
   const baths = wholeNumber(form.get('baths'), 50)
   const size = wholeNumber(form.get('size'), 100000)
   const details = String(form.get('description') || '').trim().slice(0, 600)
+  const chosenCategory = CATEGORIES[form.get('category')] ? String(form.get('category')) : null
   const catalog = await readCatalog(bucket)
   const knownCity = catalog.cities.includes(city)
   if (!title || !knownCity || !TYPES.includes(type) || !neighbourhood || phone.length < 8 || !price) {
@@ -262,6 +265,7 @@ async function createListing(request, bucket, user, env, formData) {
       submittedBy: user.id,
       submittedEmail: user.email,
       description: details || `${title} in ${neighbourhood}, ${city}.`,
+      category: chosenCategory || listingCategory({ title, description: details, beds, type }),
       createdAt: new Date().toISOString(),
     })
     await writeCatalog(bucket, latest)
@@ -579,6 +583,26 @@ export default {
       return fail({ listings })
     }
 
+    // Admin sets a listing's category (decides which access pass level can unlock it).
+    const categoryMatch = url.pathname.match(/^\/api\/admin\/listings\/([^/]+)\/category$/)
+    if (categoryMatch && request.method === 'POST') {
+      const user = await requireUser(request, env)
+      if (!user) return fail({ error: 'Sign in to update a listing.' }, 401)
+      if (!isAdmin(user, env)) return fail({ error: 'Only an admin can change the category.' }, 403)
+      const body = await request.json().catch(() => ({}))
+      if (!CATEGORIES[body.category]) return fail({ error: 'Choose Room, Studio or Apartment.' }, 400)
+      const saved = await withCatalog(async () => {
+        const catalog = await readCatalog(env.LISTINGS)
+        const listing = findListing(catalog, decodeURIComponent(categoryMatch[1]))
+        if (!listing) return null
+        listing.category = body.category
+        await writeCatalog(env.LISTINGS, catalog)
+        return listing
+      })
+      if (!saved) return fail({ error: 'That listing was not found.' }, 404)
+      return fail({ ok: true, id: String(saved.id), category: saved.category })
+    }
+
     const locationMatch = url.pathname.match(/^\/api\/admin\/listings\/([^/]+)\/location$/)
     if (locationMatch && request.method === 'POST') {
       const user = await requireUser(request, env)
@@ -740,7 +764,8 @@ export default {
       if (!user) return fail({ error: 'Sign in to buy an access pass.' }, 401)
       if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
       const body = await request.json().catch(() => ({}))
-      const bought = await buyPass(env, env.DATABASE_URL, user, { service: String(body.service || '').toUpperCase(), phone: body.phone })
+      const request_ = { service: String(body.service || '').toUpperCase(), phone: body.phone, tier: String(body.tier || 'room') }
+      const bought = body.upgrade ? await upgradePass(env, env.DATABASE_URL, user, request_) : await buyPass(env, env.DATABASE_URL, user, request_)
       if (bought.error) return fail({ error: bought.error, pass: passView(bought.pass) }, bought.status)
       return fail({ ...settings, pass: passView(bought.pass), active: await passSummary(env.DATABASE_URL, user.id) })
     }
@@ -764,15 +789,19 @@ export default {
         if (listing.available === false) return fail({ error: 'This home has been taken, so its contact is closed.' }, 410)
         summary = await passSummary(env.DATABASE_URL, user.id)
         const unlocked = summary?.homes.includes(String(listing.id))
+        const category = listingCategory(listing)
         if (!unlocked && unlockMatch) {
           if (!summary || summary.slotsLeft < 1) {
-            return fail({ error: summary ? `You have used all ${summary.maxHomes} homes on your pass. Buy a new pass to unlock more.` : 'Get an access pass first.', locked: true, active: summary, ...passSettings(env) }, 402)
+            return fail({ error: summary ? `You have used all ${summary.maxHomes} homes on your pass. Buy a new pass to unlock more.` : 'Get an access pass first.', locked: true, category, active: summary, ...passSettings(env) }, 402)
           }
-          await unlockHome(env.DATABASE_URL, user.id, listing.id)
+          if (!summary.slotsFor[category]) {
+            return fail({ error: `This home is ${category === 'apartment' ? 'an apartment' : 'a studio'}. Upgrade to the ${CATEGORIES[category].pass} to unlock it.`, locked: true, needsUpgrade: category, category, active: summary, ...passSettings(env) }, 402)
+          }
+          await unlockHome(env.DATABASE_URL, user.id, listing.id, CATEGORIES[category].rank)
           summary = await passSummary(env.DATABASE_URL, user.id)
         }
         if (!summary?.homes.includes(String(listing.id))) {
-          return fail({ error: summary?.slotsLeft ? 'Unlock this home to see its contact and exact location.' : 'Get an access pass to unlock this home.', locked: true, active: summary, ...passSettings(env) }, 402)
+          return fail({ error: summary?.slotsLeft ? 'Unlock this home to see its contact and exact location.' : 'Get an access pass to unlock this home.', locked: true, category, active: summary, ...passSettings(env) }, 402)
         }
       }
       const pass = summary?.passes.find((p) => p.homes.includes(String(listing.id)))

@@ -174,7 +174,7 @@ function App() {
     } catch {}
   }, [member?.token])
   useEffect(() => { if (authReady) loadPass() }, [authReady, member?.token, loadPass])
-  const passClock = useClock(passInfo?.active?.expiresAt, () => { loadPass(); setToast({ text: 'Your access pass has ended. Contacts and locations are locked again.', long: true }) })
+  const passClock = useClock(passInfo?.active?.expiresAt, () => { loadPass(); setToast({ text: 'Your access pass has ended. All homes are locked again.', long: true }) })
   const passLeft = timeLeft(passInfo?.active?.expiresAt, passClock)
 
   const loadAlerts = useCallback(async () => {
@@ -338,7 +338,7 @@ function App() {
       </nav>
       <div className="nav-actions">
         {!member && authReady ? <Link to="/account" navigate={navigate} className="signup-pill">Sign up</Link> : null}
-        {member && passLeft && !passInfo?.admin ? <span className="pass-pill" title="Contacts and locations are unlocked">🔓 {passLeft}</span> : null}
+        {member && passLeft && !passInfo?.admin ? <span className="pass-pill" title="Homes you can still unlock and time left on your pass">🔓 {passInfo.active.slotsLeft} left · {passLeft}</span> : null}
         {member ? <Link to="/notifications" navigate={navigate} className={`bell${page === 'alerts' ? ' active' : ''}`} aria-label={alertsData.unread ? `Notifications, ${alertsData.unread} new` : 'Notifications'}><BellIcon />{alertsData.unread ? <span className="bell-badge">{alertsData.unread > 9 ? '9+' : alertsData.unread}</span> : null}</Link> : null}
         <Link to="/list" navigate={navigate} className="primary compact">List a property</Link>
         <button className="menu" onClick={() => setMenuOpen(!menuOpen)} aria-expanded={menuOpen} aria-controls="site-nav" aria-label={menuOpen ? 'Close menu' : 'Open menu'}><MenuIcon open={menuOpen} /></button>
@@ -347,12 +347,12 @@ function App() {
     <main id="main">
       {page === 'home' && <Home listings={liveListings} filters={filters} update={updateFilters} search={() => go('listings')} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} navigate={navigate} />}
       {page === 'listings' && <Listings results={results} filters={filters} update={updateFilters} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} onAlert={createAlert} alertState={alertState} />}
-      {page === 'detail' && <Detail listing={selected} loaded={catalogLoaded} all={liveListings} back={backToListings} member={member} go={go} navigate={navigate} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} passInfo={passInfo} passLeft={passLeft} onUnlock={() => setPassModal(true)} />}
+      {page === 'detail' && <Detail listing={selected} loaded={catalogLoaded} all={liveListings} back={backToListings} member={member} go={go} navigate={navigate} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} passInfo={passInfo} passLeft={passLeft} onUnlock={() => setPassModal(true)} onPassChange={(active) => setPassInfo((current) => ({ ...(current || {}), active }))} />}
       {page === 'agents' && <Agents navigate={navigate} />}
       {page === 'list' && <ListProperty member={member} go={go} onMember={setMember} isAdmin={adminAccess === 'admin'} />}
       {page === 'workflow' && <Workflow go={go} />}
       {page === 'saved' && <Saved listings={liveListings.filter((listing) => savedIds.includes(listing.id))} onOpen={showListing} savedIds={savedIds} onSave={toggleSaved} go={go} />}
-      {page === 'account' && <Account member={member} onMember={setMember} referralCount={referralCount} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} passInfo={passInfo} passLeft={passLeft} onUnlock={() => setPassModal(true)} />}
+      {page === 'account' && <Account member={member} onMember={setMember} referralCount={referralCount} savedCount={savedIds.length} alertCount={alertsData.alerts.length} go={go} passInfo={passInfo} passLeft={passLeft} onUnlock={() => setPassModal(true)} listings={liveListings} onOpenListing={showListing} />}
       {page === 'refer' && <Refer member={member} go={go} />}
       {page === 'admin' && <Admin member={member} authReady={authReady} access={adminAccess} onPublished={refreshPublicListings} />}
       {page === 'notfound' && <section className="shell section narrow not-found"><p className="kicker">ERROR 404</p><h1 className="page-title">This page does not exist</h1><p className="lead">The link may be old or mistyped. Try one of these instead.</p><div className="empty-actions left"><Link to="/homes" navigate={navigate} className="primary">Browse homes</Link><Link to="/" navigate={navigate} className="secondary">Go to the home page</Link></div></section>}
@@ -365,7 +365,7 @@ function App() {
       setPassModal(false)
       loadPass()
       if (data?.active) setPassInfo((current) => ({ ...(current || {}), ...data, pending: null }))
-      setToast({ text: `Unlocked. You can see contacts and exact locations for ${passInfo?.hours || 24} hours.`, long: true })
+      setToast({ text: `Pass active. Open the homes you like best and press “Unlock this home” (up to ${passInfo?.homes || 4} homes, ${passInfo?.hours || 48} hours).`, long: true })
     }} /> : null}
     <Footer navigate={navigate} />
   </>
@@ -434,7 +434,7 @@ function Home({ listings: homeListings, filters, update, search, onOpen, savedId
       return <Link key={city} to={homesLink({ city })} navigate={navigate} className="city-card"><b>{city}</b><span>{count} {count === 1 ? 'home' : 'homes'} available</span><span className="city-links"><span>Rent</span><span>Sale</span><span>Guest houses</span></span></Link>
     })}</div></section>
     <section className="shell role-section"><Role icon="⌂" title="I'm a Landlord" text="List your property and get serious tenants faster." action="List Property" onClick={() => go('list')} /><Role icon="⌕" title="I'm a House Seeker" text="Find verified properties that match your needs." action="Start Searching" onClick={() => go('listings')} /><Role icon="♙" title="I know a landlord" text="Refer them to Findam and gain when their homes are let." action="Refer a landlord" onClick={() => go('refer')} /></section>
-    <section className="workflow-preview"><div className="shell"><p className="kicker">HOW FINDAM WORKS</p><h2>Verified from visit to move-in.</h2><div className="steps"><Step number="1" title="Search" text="Filter by city, budget, bedrooms and type." /><Step number="2" title="Browse accepted homes" text="Only homes an admin has accepted appear publicly. Sample cards are marked." /><Step number="3" title="Unlock the contact" text="A 24-hour access pass shows every landlord’s phone and the exact location." /><Step number="4" title="Schedule viewing" text="Choose a time to see the home." /><Step number="5" title="Move in" text="Your agent supports the handover." /></div><p className="workflow-more"><Link to="/how-it-works" navigate={navigate} className="text-button">Read how Findam verifies homes →</Link></p></div></section>
+    <section className="workflow-preview"><div className="shell"><p className="kicker">HOW FINDAM WORKS</p><h2>Verified from visit to move-in.</h2><div className="steps"><Step number="1" title="Search" text="Filter by city, budget, bedrooms and type." /><Step number="2" title="Browse accepted homes" text="Only homes an admin has accepted appear publicly. Sample cards are marked." /><Step number="3" title="Unlock the contact" text="One access pass unlocks the landlord’s phone and exact location of 4 homes you choose, for 48 hours." /><Step number="4" title="Schedule viewing" text="Choose a time to see the home." /><Step number="5" title="Move in" text="Your agent supports the handover." /></div><p className="workflow-more"><Link to="/how-it-works" navigate={navigate} className="text-button">Read how Findam verifies homes →</Link></p></div></section>
   </>
 }
 
@@ -442,11 +442,15 @@ function Trust({ icon, title, text }) { return <div className="trust"><i aria-hi
 function Role({ icon, title, text, action, onClick }) { return <article className="role"><i aria-hidden="true">{icon}</i><div><h3>{title}</h3><p>{text}</p><button onClick={onClick}>{action} →</button></div></article> }
 function Step({ number, title, text }) { return <article><b>{number}</b><h3>{title}</h3><p>{text}</p></article> }
 
-function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, savedIds, onSave, passInfo, passLeft, onUnlock }) {
+function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, savedIds, onSave, passInfo, passLeft, onUnlock, onPassChange }) {
   const [details, setDetails] = useState(null)
   const [detailsError, setDetailsError] = useState('')
   const [showMap, setShowMap] = useState(false)
-  const unlocked = Boolean(member && (passInfo?.admin || passLeft))
+  const [unlocking, setUnlocking] = useState(false)
+  const active = passLeft ? passInfo?.active : null
+  const homeUnlocked = Boolean(listing && active?.homes?.includes(String(listing.id)))
+  const unlocked = Boolean(member && listing && (passInfo?.admin || listing.sample || homeUnlocked))
+  const slotsLeft = active?.slotsLeft || 0
   useEffect(() => { setShowMap(false) }, [listing?.id])
   // Contact and exact location come from the server only while the access pass is active.
   useEffect(() => {
@@ -471,8 +475,24 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
   const similar = all.filter((item) => item.id !== listing.id && item.city === listing.city && isAvailable(item)).slice(0, 4)
   const photos = listing.photos || []
   const unlock = () => { if (!member) go('account'); else onUnlock() }
-  const fee = formatFcfa(passInfo?.fee || 1000)
-  const hours = passInfo?.hours || 24
+  const fee = formatFcfa(passInfo?.fee || 10000)
+  const hours = passInfo?.hours || 48
+  const homesPerPass = passInfo?.homes || 4
+  const useSlot = async () => {
+    setUnlocking(true)
+    setDetailsError('')
+    try {
+      const response = await fetch(`/api/listings/${encodeURIComponent(listing.id)}/unlock`, { method: 'POST', headers: authHeadersFor(member) })
+      const payload = await response.json().catch(() => ({}))
+      if (payload.active !== undefined) onPassChange(payload.active)
+      if (!response.ok) throw new Error(payload.error || 'This home could not be unlocked.')
+      setDetails(payload)
+    } catch (error) {
+      setDetailsError(error.message)
+    } finally {
+      setUnlocking(false)
+    }
+  }
   return <section className="shell section">
     <div className="breadcrumbs" role="navigation" aria-label="Breadcrumb"><ol>
       <li><Link to="/" navigate={navigate}>Home</Link></li>
@@ -492,12 +512,12 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
       <div className="facts">{listing.beds ? <span>{listing.beds} {listing.beds === 1 ? 'Bedroom' : 'Bedrooms'}</span> : null}{listing.baths ? <span>{listing.baths} {listing.baths === 1 ? 'Bathroom' : 'Bathrooms'}</span> : null}{listing.size ? <span>{listing.size} m²</span> : null}<span>{PERIODS[listing.period]?.long === 'sale price' ? 'For sale' : `Paid ${PERIODS[listing.period]?.long || ''}`}</span></div>
       <div className={`location-block${unlocked ? '' : ' locked'}`}>
         <div><h2>{unlocked ? 'Location' : '🔒 Location'}</h2><p>{!unlocked
-          ? <>{listing.neighbourhood}, {listing.city}. {listing.exact ? 'The exact position of the house and directions to it' : 'The map'} unlock with an access pass.</>
+          ? <>{listing.neighbourhood}, {listing.city}. {listing.exact ? 'The exact position of the house and directions to it unlock' : 'The map unlocks'} {slotsLeft ? 'when you unlock this home.' : 'with an access pass.'}</>
           : listing.exact ? <>{listing.neighbourhood}, {listing.city}. The pin marks the house itself, and you can get directions from where you are.</>
             : <>{listing.neighbourhood}, {listing.city}. The map shows the neighbourhood; the house finder will guide you to the door.</>}</p></div>
         {unlocked
           ? <button type="button" className="secondary" aria-expanded={showMap} onClick={() => setShowMap(!showMap)} disabled={listing.exact && !details}>{showMap ? 'Hide map' : 'See location'}</button>
-          : <button type="button" className="primary" onClick={unlock}>{member ? 'Unlock location' : 'Sign in to unlock'}</button>}
+          : <button type="button" className="primary" onClick={slotsLeft ? useSlot : unlock} disabled={unlocking}>{!member ? 'Sign in to unlock' : slotsLeft ? 'Unlock this home' : 'Unlock location'}</button>}
       </div>
       {unlocked && showMap ? (listing.exact && details?.exact
         ? <Suspense fallback={<p className="muted" role="status">Loading the map…</p>}><ExactMap lat={details.lat} lng={details.lng} title={listing.title} /></Suspense>
@@ -513,13 +533,19 @@ function Detail({ listing, loaded, all, back, member, go, navigate, onOpen, save
             ? <><span className="contact-label">Landlord’s phone</span><a className="contact-phone" href={`tel:${details.phone.replace(/\s/g, '')}`}>{details.phone}</a><a className="secondary contact-call" href={`tel:${details.phone.replace(/\s/g, '')}`}>Call now</a></>
             : <p>This is a sample home, so there is no real contact. Real listings show the landlord’s phone here.</p>)
             : detailsError ? <p className="form-message warn">{detailsError}</p> : <p className="muted">Loading the contact…</p>}
-          {passInfo?.admin ? <small className="pass-left">Admin access</small> : passLeft ? <small className="pass-left">Your access pass ends in {passLeft}</small> : null}
+          {passInfo?.admin ? <small className="pass-left">Admin access</small> : listing.sample ? null : details?.expiresAt ? <small className="pass-left">Unlocked until {new Date(details.expiresAt).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' })} ({passLeft} left)</small> : null}
+        </div>
+        : slotsLeft ? <div className="locked-card ready">
+          <b>🔓 You can unlock this home</b>
+          <p>You have <b>{slotsLeft} of {active.maxHomes}</b> {active.maxHomes === 1 ? 'home' : 'homes'} left on your pass. Unlocking shows the landlord’s phone number and the exact location until your pass ends ({passLeft} left).</p>
+          <button className="primary" onClick={useSlot} disabled={unlocking}>{unlocking ? 'Unlocking…' : 'Unlock this home'}</button>
+          {detailsError ? <p className="form-message warn">{detailsError}</p> : null}
         </div>
         : <div className="locked-card">
           <b>🔒 Contact and exact location are locked</b>
-          <p>Get a {hours}-hour access pass to see the landlord’s phone number and the exact location of every home on Findam.</p>
-          <button className="primary" onClick={unlock}>{member ? `Unlock for ${hours} hours · ${fee}` : 'Sign in to unlock'}</button>
-          {!member ? <small>Creating an account is free and takes under a minute.</small> : null}
+          <p>{active ? `You have used all ${active.maxHomes} homes on your pass.` : `Choose up to ${homesPerPass} homes you like best and see each landlord’s phone number and the exact location for ${hours} hours.`}</p>
+          <button className="primary" onClick={unlock}>{!member ? 'Sign in to unlock' : active ? `Get a new pass · ${fee}` : `Get a pass · ${fee}`}</button>
+          <small>{member ? `${homesPerPass} homes · ${hours} hours · MTN or Orange Money` : 'Creating an account is free and takes under a minute.'}</small>
         </div>}
       {listing.sample ? <div className="verified">Sample listing. A house finder has not inspected this home.</div> : <div className="verified">Accepted by an admin and visible to house seekers.</div>}
     </aside></div>
@@ -639,7 +665,7 @@ function HelpBot({ go, navigate, passInfo }) {
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [messages, setMessages] = useState([{ from: 'bot', text: 'Hi! I am Findam Bot. Ask me about homes, prices, the access pass, paying with MTN or Orange Money, listing a property or the referral programme.' }])
-  const botReply = (text) => answer(text, { fee: passInfo?.fee, hours: passInfo?.hours }).text
+  const botReply = (text) => answer(text, { fee: passInfo?.fee, hours: passInfo?.hours, homes: passInfo?.homes }).text
   const sendMessage = (event) => { event.preventDefault(); const text = message.trim(); if (!text) return; setMessages((current) => [...current, { from: 'user', text }, { from: 'bot', text: botReply(text) }]); setMessage('') }
   const quickReply = (text) => setMessages((current) => [...current, { from: 'user', text }, { from: 'bot', text: botReply(text) }])
   return <div className="bot-widget">

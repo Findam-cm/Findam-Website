@@ -13,7 +13,7 @@ function initialMode() {
 }
 
 const TITLES = {
-  signup: ['Create your Findam account', 'Free to join. Save homes, get alerts when new homes match your search, list a property, refer landlords, and unlock contacts and locations with an access pass.'],
+  signup: ['Create your Findam account', 'Free to join. Save homes, get alerts when new homes match your search, list a property, refer landlords, and unlock the contact and location of the homes you like with an access pass.'],
   signin: ['Welcome back', 'Sign in to see your saved homes, alerts, listings and referrals.'],
   forgot: ['Reset your password', 'Enter the email on your account. We will send a link to choose a new password.'],
   reset: ['Choose a new password', 'Enter a new password for your account.'],
@@ -28,7 +28,7 @@ function friendlyError(error, mode) {
   return text || (mode === 'signup' ? 'Your account could not be created. Try again.' : 'Sign in failed. Try again.')
 }
 
-export default function Account({ member, onMember, referralCount, savedCount, alertCount, go, passInfo, passLeft, onUnlock }) {
+export default function Account({ member, onMember, referralCount, savedCount, alertCount, go, passInfo, passLeft, onUnlock, listings, onOpenListing }) {
   const [loading, setLoading] = useState(true)
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('token') || '')
   const [mode, setMode] = useState(initialMode)
@@ -152,13 +152,20 @@ export default function Account({ member, onMember, referralCount, savedCount, a
       <div><h1>{member.name || 'Findam member'}</h1><p>{member.email}</p></div>
       <button className="secondary" onClick={signOut}>Sign out</button>
     </div>
-    {passInfo?.admin ? null : <div className={`pass-card${passLeft ? ' on' : ''}`}>
-      <div>
-        <b>{passLeft ? '🔓 Access pass active' : '🔒 Contacts and locations are locked'}</b>
-        <p>{passLeft ? `You can see every landlord’s phone number and exact location for another ${passLeft}.` : `Unlock the landlord’s phone number and exact location of every home for ${passInfo?.hours || 24} hours.`}</p>
+    {passInfo?.admin ? null : (() => {
+      const active = passLeft ? passInfo?.active : null
+      const unlockedHomes = (active?.homes || []).map((id) => (listings || []).find((item) => String(item.id) === id)).filter(Boolean)
+      return <div className={`pass-card${active ? ' on' : ''}`}>
+        <div>
+          <b>{active ? `🔓 Access pass active · ${passLeft} left` : '🔒 Contacts and locations are locked'}</b>
+          <p>{active
+            ? `${active.slotsLeft} of ${active.maxHomes} ${active.maxHomes === 1 ? 'home' : 'homes'} left to unlock. Open a home and press “Unlock this home”.`
+            : `A pass unlocks the landlord’s phone number and exact location of ${passInfo?.homes || 4} homes you choose, for ${passInfo?.hours || 48} hours.`}</p>
+          {unlockedHomes.length ? <ul className="unlocked-homes">{unlockedHomes.map((item) => <li key={item.id}><a href={`/homes/${encodeURIComponent(item.id)}`} onClick={(event) => { event.preventDefault(); onOpenListing?.(item) }}>{item.title}</a> · {item.neighbourhood}, {item.city}</li>)}</ul> : null}
+        </div>
+        {active && active.slotsLeft > 0 ? null : <button className="primary" onClick={onUnlock}>{active ? 'Get a new pass' : 'Get a pass'} · {formatFcfa(passInfo?.fee || 10000)}</button>}
       </div>
-      {passLeft ? null : <button className="primary" onClick={onUnlock}>Unlock · {formatFcfa(passInfo?.fee || 1000)}</button>}
-    </div>}
+    })()}
     <div className="stat-grid">
       <button type="button" className="stat" onClick={() => go('refer')}><strong>{referralCount ?? 0}</strong><span>Landlords referred</span><small>Referral programme</small></button>
       <button type="button" className="stat" onClick={() => go('saved')}><strong>{savedCount}</strong><span>Saved homes</span><small>Your shortlist</small></button>

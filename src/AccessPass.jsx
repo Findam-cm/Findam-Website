@@ -79,7 +79,7 @@ export function PassModal({ member, settings, onClose, onActive }) {
       const data = await response.json().catch(() => ({}))
       if (response.status === 409 && data.pass?.status === 'pending') { setWaiting(true); return }
       if (!response.ok) throw new Error(data.error || 'The payment could not be started.')
-      if (data.pass?.status === 'active') { onActive({ ...settings, active: data.pass }); return }
+      if (data.pass?.status === 'active') { onActive({ ...settings, active: data.active || null }); return }
       if (data.pass?.status === 'failed') throw new Error(`The payment did not go through: ${data.pass.error || 'it was not approved.'}`)
       setWaited(0)
       setWaiting(true)
@@ -90,14 +90,15 @@ export function PassModal({ member, settings, onClose, onActive }) {
     }
   }
 
-  const hours = settings?.hours || 24
+  const hours = settings?.hours || 48
+  const homes = settings?.homes || 4
   return <div className="modal-backdrop" onClick={() => { if (!busy) onClose() }}>
     <div className="modal pass-modal" role="dialog" aria-modal="true" aria-labelledby="pass-title" onClick={(event) => event.stopPropagation()}>
       <button type="button" className="modal-x" onClick={onClose} aria-label="Close" disabled={busy}>×</button>
       <div className="modal-icon lock" aria-hidden="true">🔓</div>
-      <h2 id="pass-title">Unlock contacts and locations</h2>
-      <p>See the landlord’s phone number and the exact location of <b>every home</b> on Findam for {hours} hours.</p>
-      <p className="pass-price">{formatFcfa(settings?.fee || 0)} <span>for {hours} hours</span></p>
+      <h2 id="pass-title">Unlock {homes} homes for {hours} hours</h2>
+      <p>Choose up to <b>{homes} homes</b> you like best and see each landlord’s phone number and the exact location of the house. After {hours} hours, all of them lock again.</p>
+      <p className="pass-price">{formatFcfa(settings?.fee || 0)} <span>{homes} homes · {hours} hours</span></p>
       {!settings?.configured ? <p className="form-message warn">Mobile Money payments are being switched on. Please try again a little later.</p> : waiting ? <div className="pay-wait compact" role="status" aria-live="polite">
         <span className="spinner" aria-hidden="true" />
         <div><b>Approve the payment on your phone</b><p>Enter your Mobile Money PIN to confirm {formatFcfa(settings?.fee || 0)}. This window updates by itself.</p>
@@ -115,7 +116,7 @@ export function PassModal({ member, settings, onClose, onActive }) {
         </label>
         {error ? <p className="form-message warn" role="alert">{error}</p> : null}
         <button className="primary block" disabled={busy}>{busy ? 'Sending the request to your phone…' : `Pay ${formatFcfa(settings?.fee || 0)}`}</button>
-        <p className="pay-secure">Payments are processed by MeSomb. Findam never sees your PIN. After {hours} hours, details lock again.</p>
+        <p className="pay-secure">Payments are processed by MeSomb. Findam never sees your PIN. After paying, open a home and press “Unlock this home”.</p>
       </form>}
       {error && waiting ? <p className="form-message warn" role="alert">{error}</p> : null}
     </div>

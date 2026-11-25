@@ -1,9 +1,9 @@
 import { seed } from './seed.js'
-import { activePass, latestPass } from './db.js'
+import { latestPass, unlockHome } from './db.js'
 import { addAlert, addReferral, checkPostgres, createReward, deleteAlert, findAcceptedReferralByPhone, getReferral, getReward, listAlerts, listPendingReferrals, listRewards, markAlertsSeen, memberAccount, reviewReferral, rewardsForListing, transitionReward } from './db.js'
 import { applicationStatus, mesombConfigured } from './mesomb.js'
 import { landlordView, refreshReward, startCollect, startPayout } from './rewards.js'
-import { buyPass, passSettings, passView, refreshPass } from './passes.js'
+import { buyPass, passSettings, passSummary, passView, refreshPass } from './passes.js'
 import { allowedOrigins, isAdmin, requireUser } from './session.js'
 import { EMPTY_FILTERS, describeFilters, matchesFilters } from '../src/filters.js'
 
@@ -734,35 +734,48 @@ export default {
         const admin = isAdmin(user, env)
         let latest = await latestPass(env.DATABASE_URL, user.id)
         if (latest?.status === 'pending') latest = await refreshPass(env, env.DATABASE_URL, latest)
-        const active = await activePass(env.DATABASE_URL, user.id)
-        return fail({ ...settings, configured: mesombConfigured(env), admin, active: passView(active), pending: latest?.status === 'pending' ? passView(latest) : null, lastFailed: latest?.status === 'failed' ? passView(latest) : null })
+        const active = await passSummary(env.DATABASE_URL, user.id)
+        return fail({ ...settings, configured: mesombConfigured(env), admin, active, pending: latest?.status === 'pending' ? passView(latest) : null, lastFailed: latest?.status === 'failed' ? passView(latest) : null })
       }
       if (!user) return fail({ error: 'Sign in to buy an access pass.' }, 401)
       if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
       const body = await request.json().catch(() => ({}))
       const bought = await buyPass(env, env.DATABASE_URL, user, { service: String(body.service || '').toUpperCase(), phone: body.phone })
       if (bought.error) return fail({ error: bought.error, pass: passView(bought.pass) }, bought.status)
-      return fail({ ...settings, pass: passView(bought.pass) })
+      return fail({ ...settings, pass: passView(bought.pass), active: await passSummary(env.DATABASE_URL, user.id) })
     }
 
-    // Contact and exact location of a listing: only with an active access pass (admins always).
+    // A member spends one slot of their pass to unlock a home of their choice.
+    const unlockMatch = url.pathname.match(/^\/api\/listings\/([^/]+)\/unlock$/)
+    // Contact and exact location: only for homes the member unlocked with an active pass (admins always).
     const detailsMatch = url.pathname.match(/^\/api\/listings\/([^/]+)\/details$/)
-    if ((detailsMatch && request.method === 'GET') || (contactMatch && request.method === 'POST')) {
+    if ((detailsMatch && request.method === 'GET') || (contactMatch && request.method === 'POST') || (unlockMatch && request.method === 'POST')) {
       const user = await requireUser(request, env)
       if (!user) return fail({ error: 'Sign in to unlock contacts and locations.', locked: true }, 401)
       const catalog = await readCatalog(env.LISTINGS)
-      const id = decodeURIComponent((detailsMatch || contactMatch)[1])
+      const id = decodeURIComponent((detailsMatch || contactMatch || unlockMatch)[1])
       const listing = [...catalog.listings, ...catalog.submissions].find((item) => String(item.id) === id)
       const admin = isAdmin(user, env)
       if (!listing || (!isPublicListing(listing) && !admin)) return fail({ error: 'That property is no longer listed.' }, 404)
-      let pass = null
-      if (!admin) {
-        if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
-        pass = await activePass(env.DATABASE_URL, user.id)
-        if (!pass) return fail({ error: 'Get an access pass to see contacts and exact locations.', locked: true, ...passSettings(env) }, 402)
-        if (listing.available === false) return fail({ error: 'This home has been taken, so its contact is closed.' }, 410)
-      }
       const sample = Boolean(listing.sample || SAMPLE_IDS.has(String(listing.id)))
+      let summary = null
+      if (!admin && !sample) {
+        if (!env.DATABASE_URL) return fail({ error: 'Postgres is not configured.' }, 500)
+        if (listing.available === false) return fail({ error: 'This home has been taken, so its contact is closed.' }, 410)
+        summary = await passSummary(env.DATABASE_URL, user.id)
+        const unlocked = summary?.homes.includes(String(listing.id))
+        if (!unlocked && unlockMatch) {
+          if (!summary || summary.slotsLeft < 1) {
+            return fail({ error: summary ? `You have used all ${summary.maxHomes} homes on your pass. Buy a new pass to unlock more.` : 'Get an access pass first.', locked: true, active: summary, ...passSettings(env) }, 402)
+          }
+          await unlockHome(env.DATABASE_URL, user.id, listing.id)
+          summary = await passSummary(env.DATABASE_URL, user.id)
+        }
+        if (!summary?.homes.includes(String(listing.id))) {
+          return fail({ error: summary?.slotsLeft ? 'Unlock this home to see its contact and exact location.' : 'Get an access pass to unlock this home.', locked: true, active: summary, ...passSettings(env) }, 402)
+        }
+      }
+      const pass = summary?.passes.find((p) => p.homes.includes(String(listing.id)))
       return fail({
         ok: true,
         title: listing.title,
@@ -771,7 +784,8 @@ export default {
         exact: Boolean(listing.exact),
         lat: listing.lat ?? null,
         lng: listing.lng ?? null,
-        expiresAt: pass?.expires_at || null,
+        expiresAt: pass?.expiresAt || null,
+        active: summary,
       })
     }
 

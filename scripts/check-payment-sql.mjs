@@ -35,6 +35,22 @@ try {
   await step('activate pass for 24 h', "UPDATE access_passes SET status = 'active', paid_at = now(), expires_at = now() + make_interval(hours => hours), last_error = NULL WHERE id = $1 AND status = 'pending' RETURNING expires_at, round(extract(epoch from (expires_at - now())) / 3600) AS h", [pass[0]?.id], (rows) => Number(rows[0]?.h) === 24)
   await step('activating twice is refused', "UPDATE access_passes SET status = 'active' WHERE id = $1 AND status = 'pending' RETURNING id", [pass[0]?.id], (rows) => rows.length === 0)
   await step('active pass lookup', "SELECT id FROM access_passes WHERE user_id = $1 AND status = 'active' AND expires_at > now() ORDER BY expires_at DESC LIMIT 1", ['qa-user'], (rows) => rows.length === 1)
+  await step('add max_homes column', 'ALTER TABLE access_passes ADD COLUMN IF NOT EXISTS max_homes int NOT NULL DEFAULT 4')
+  await step('create pass_unlocks', 'CREATE TABLE IF NOT EXISTS pass_unlocks (pass_id uuid NOT NULL REFERENCES access_passes (id), user_id text NOT NULL, listing_id text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (pass_id, listing_id))')
+  // Same statement as unlockHome() in worker/db.js.
+  const unlock = `INSERT INTO pass_unlocks (pass_id, user_id, listing_id)
+      SELECT a.id, $1, $2 FROM access_passes a
+      WHERE a.user_id = $1 AND a.status = 'active' AND a.expires_at > now()
+        AND NOT EXISTS (SELECT 1 FROM pass_unlocks u JOIN access_passes b ON b.id = u.pass_id WHERE u.user_id = $1 AND u.listing_id = $2 AND b.status = 'active' AND b.expires_at > now())
+        AND (SELECT count(*) FROM pass_unlocks u WHERE u.pass_id = a.id) < a.max_homes
+      ORDER BY a.expires_at ASC LIMIT 1 RETURNING pass_id`
+  for (const home of ['h1', 'h2', 'h3', 'h4']) await step(`unlock home ${home}`, unlock, ['qa-user', home], (rows) => rows.length === 1)
+  await step('5th home is refused (limit 4)', unlock, ['qa-user', 'h5'], (rows) => rows.length === 0)
+  await step('unlocking the same home again uses no slot', unlock, ['qa-user', 'h2'], (rows) => rows.length === 0)
+  await step('summary query lists 4 homes', `SELECT a.max_homes, coalesce((SELECT array_agg(u.listing_id ORDER BY u.created_at) FROM pass_unlocks u WHERE u.pass_id = a.id), '{}') AS homes FROM access_passes a WHERE a.user_id = $1 AND a.status = 'active' AND a.expires_at > now() ORDER BY a.expires_at ASC`, ['qa-user'], (rows) => rows[0]?.homes?.length === 4 && rows[0]?.max_homes === 4)
+  await client.query("UPDATE access_passes SET expires_at = now() - interval '1 second' WHERE user_id = 'qa-user'")
+  await step('after expiry nothing can be unlocked', unlock, ['qa-user', 'h6'], (rows) => rows.length === 0)
+  await step('after expiry no active pass remains', "SELECT id FROM access_passes WHERE user_id = 'qa-user' AND status = 'active' AND expires_at > now()", [], (rows) => rows.length === 0)
 
   const ref = await step('insert test referral', "INSERT INTO referrals (user_id, user_email, kind, contact_name, phone, phone_key, city, neighbourhood, detail, credits, referrer_phone) VALUES ('qa-user','qa@example.com','landlord','QA Landlord','+237 677 999 888','237677999888','Buea','Molyko','',0,'699111222') RETURNING id", [], (rows) => rows.length === 1)
   await client.query("UPDATE referrals SET status = 'accepted' WHERE id = $1", [ref[0]?.id])

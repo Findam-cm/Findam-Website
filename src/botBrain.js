@@ -21,15 +21,15 @@ const TOPICS = [
   },
   {
     id: 'expiry',
-    strong: [/expir/, /locked again/, /lock(s|ed)? again/, /after 24/, /pass (ended|ends|finished|over)/, /how long/, /(pass|access) last/],
+    strong: [/expir/, /locked again/, /lock(s|ed)? again/, /after (24|48)/, /pass (ended|ends|finished|over)/, /how long/, /(pass|access) last/],
     words: [],
-    reply: (c) => `A pass lasts ${c.hours} hours from the moment your payment is approved. You can see the time left at the top of the page and on each listing. When it ends, contacts and exact locations lock again; buy a new pass to unlock them.`,
+    reply: (c) => `A pass lasts ${c.hours} hours from the moment your payment is approved, and lets you unlock up to ${c.homes} homes. The time left shows at the top of the page and in your account. When it ends, all the homes you unlocked lock again; buy a new pass to unlock homes again.`,
   },
   {
     id: 'pass',
-    strong: [/access pass/, /\bpass\b/, /\bunlock/, /subscri/, /abonnement/, /d[ée]bloqu/, /24 ?h(ours?)?\b/, /\block(ed)?\b/, /(how much|cost|price|pay).*(contact|number|unlock|location|landlord)/, /(contact|number|location).*(cost|pay|price|how much)/, /cost to (see|get|unlock|call)/],
+    strong: [/access pass/, /\bpass\b/, /\bunlock/, /subscri/, /abonnement/, /d[ée]bloqu/, /(24|48) ?h(ours?)?\b/, /\block(ed)?\b/, /how many (homes|houses)/, /\b(4|four) (homes|houses)/, /(open|unlock) (more|another|other) (homes?|houses?)/, /(how much|cost|price|pay).*(contact|number|unlock|location|landlord)/, /(contact|number|location).*(cost|pay|price|how much)/, /cost to (see|get|unlock|call)/],
     words: [/\bfee\b/],
-    reply: (c) => `An access pass costs ${n.format(c.fee)} FCFA and shows the landlord’s phone number and the exact location of every home on Findam for ${c.hours} hours. Open any listing, press “Unlock”, choose MTN Mobile Money or Orange Money and approve on your phone. After ${c.hours} hours, details lock again and you can buy a new pass.`,
+    reply: (c) => `An access pass costs ${n.format(c.fee)} FCFA. It lets you choose up to ${c.homes} homes you like best and see each landlord’s phone number and the exact location of the house for ${c.hours} hours. Buy it from any listing with MTN Mobile Money or Orange Money, then open each home you want and press “Unlock this home”. After ${c.hours} hours, all of them lock again.`,
   },
   {
     id: 'payment_problem',
@@ -47,7 +47,7 @@ const TOPICS = [
     id: 'contact',
     strong: [/contact/, /phone number/, /landlord.?s? (number|phone)/, /call (the )?(landlord|owner|agent)/, /num[ée]ro/, /reach the (landlord|owner)/],
     words: [/\bagent\b/, /\bowner\b/, /whatsapp/],
-    reply: (c) => `Each landlord’s phone number is shown on the listing once you have an access pass (${n.format(c.fee)} FCFA for ${c.hours} hours, all homes). Sign in, open the home, press “Unlock”, and the number appears with a “Call now” button.`,
+    reply: (c) => `A landlord’s phone number appears on the listing once you unlock that home with an access pass (${n.format(c.fee)} FCFA for ${c.homes} homes of your choice, ${c.hours} hours). Sign in, open the home, press “Unlock this home”, and the number appears with a “Call now” button.`,
   },
   {
     id: 'visit',
@@ -148,7 +148,7 @@ const TOPICS = [
 const FALLBACK = 'I can help with finding a home, prices, the access pass, payments with MTN or Orange Money, exact locations, listing a property, alerts and the referral programme. Could you ask in a few more words?'
 
 export function answer(question, context = {}) {
-  const c = { fee: context.fee || 1000, hours: context.hours || 24 }
+  const c = { fee: context.fee || 10000, hours: context.hours || 48, homes: context.homes || 4 }
   const q = String(question || '').toLowerCase().normalize('NFC').replace(/\s+/g, ' ').trim()
   if (!q) return { id: 'empty', text: FALLBACK }
   let best = null

@@ -107,6 +107,16 @@ async function ensureTables(sql, databaseUrl) {
     )
   `
   await sql`CREATE INDEX IF NOT EXISTS access_passes_user ON access_passes (user_id, expires_at DESC)`
+  await sql`ALTER TABLE access_passes ADD COLUMN IF NOT EXISTS max_homes int NOT NULL DEFAULT 4`
+  await sql`
+    CREATE TABLE IF NOT EXISTS pass_unlocks (
+      pass_id uuid NOT NULL REFERENCES access_passes (id),
+      user_id text NOT NULL,
+      listing_id text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (pass_id, listing_id)
+    )
+  `
   await sql`
     CREATE TABLE IF NOT EXISTS referral_rewards (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -209,7 +219,46 @@ export async function memberAccount(databaseUrl, userId) {
 }
 
 // ---- Access passes: a paid pass unlocks contacts and exact locations for a limited time ----
-const PASS_COLUMNS = 'id, user_id, user_email, amount, hours, status, trx, service, payer_phone, last_error, created_at, paid_at, expires_at'
+const PASS_COLUMNS = 'id, user_id, user_email, amount, hours, max_homes, status, trx, service, payer_phone, last_error, created_at, paid_at, expires_at'
+
+// Active passes with the homes each one has unlocked (a member may hold more than one).
+export async function activePassesWithHomes(databaseUrl, userId) {
+  const sql = client(databaseUrl)
+  await ensureTables(sql, databaseUrl)
+  return sql`
+    SELECT a.id, a.amount, a.hours, a.max_homes, a.expires_at, a.paid_at,
+      coalesce((SELECT array_agg(u.listing_id ORDER BY u.created_at) FROM pass_unlocks u WHERE u.pass_id = a.id), '{}') AS homes
+    FROM access_passes a
+    WHERE a.user_id = ${userId} AND a.status = 'active' AND a.expires_at > now()
+    ORDER BY a.expires_at ASC
+  `
+}
+
+// Unlocks one home with a free slot on the member's active pass (soonest-expiring first).
+// Serialised per member with an advisory lock so two quick taps can never exceed the limit.
+export async function unlockHome(databaseUrl, userId, listingId) {
+  const sql = client(databaseUrl)
+  await ensureTables(sql, databaseUrl)
+  const id = String(listingId)
+  const results = await sql.transaction([
+    sql`SELECT pg_advisory_xact_lock(hashtext(${'unlock:' + userId}))`,
+    sql`
+      INSERT INTO pass_unlocks (pass_id, user_id, listing_id)
+      SELECT a.id, ${userId}, ${id}
+      FROM access_passes a
+      WHERE a.user_id = ${userId} AND a.status = 'active' AND a.expires_at > now()
+        AND NOT EXISTS (
+          SELECT 1 FROM pass_unlocks u JOIN access_passes b ON b.id = u.pass_id
+          WHERE u.user_id = ${userId} AND u.listing_id = ${id} AND b.status = 'active' AND b.expires_at > now()
+        )
+        AND (SELECT count(*) FROM pass_unlocks u WHERE u.pass_id = a.id) < a.max_homes
+      ORDER BY a.expires_at ASC
+      LIMIT 1
+      RETURNING pass_id
+    `,
+  ])
+  return results[1][0]?.pass_id || null
+}
 
 export async function activePass(databaseUrl, userId) {
   const sql = client(databaseUrl)
@@ -233,8 +282,8 @@ export async function createPass(databaseUrl, input) {
   const sql = client(databaseUrl)
   await ensureTables(sql, databaseUrl)
   const rows = await sql`
-    INSERT INTO access_passes (user_id, user_email, amount, hours, trx, service, payer_phone)
-    VALUES (${input.userId}, ${input.email}, ${input.amount}, ${input.hours}, ${input.trx}, ${input.service}, ${input.phone})
+    INSERT INTO access_passes (user_id, user_email, amount, hours, max_homes, trx, service, payer_phone)
+    VALUES (${input.userId}, ${input.email}, ${input.amount}, ${input.hours}, ${input.maxHomes}, ${input.trx}, ${input.service}, ${input.phone})
     RETURNING ${sql.unsafe(PASS_COLUMNS)}
   `
   return rows[0]
